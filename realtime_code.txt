@@ -1,0 +1,674 @@
+Code for realtime detection
+
+to run this file first go into that folder where saved by using command cd <folder_name>
+then run this command python realtime_final.py
+
+
+realtime_final.py 
+
+
+import numpy as np
+import pandas as pd
+import joblib
+import json
+import os
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
+
+import lime
+import lime.lime_tabular
+import shap
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import base64
+from io import BytesIO
+
+class ExplainableNIDSDetector:
+    """Real-time NIDS with LIME and SHAP explanations"""
+    
+    def __init__(self, model_dir):
+        self.model_dir = model_dir
+        self.models = {}
+        self.scaler = None
+        self.label_encoder = None
+        self.metadata = None
+        self.variance_selector = None
+        self.kbest_selector = None
+        self.expected_features = None
+        self.class_weights = None
+        self.lime_explainer = None
+        self.shap_explainers = {}
+        self.feature_names = None
+        
+        # Store original training feature names for intelligent mapping
+        self.training_feature_names = None
+        
+        print("="*80)
+        print("EXPLAINABLE NETWORK INTRUSION DETECTION SYSTEM")
+        print("Powered by LIME + SHAP | Works with ANY CSV")
+        print("="*80)
+        
+        self.load_all_artifacts()
+        self.initialize_explainers()
+    
+    def load_all_artifacts(self):
+        """Load all trained models and preprocessing artifacts."""
+        print("\n📂 Loading system components...")
+        
+        # Load scaler
+        try:
+            scaler_path = os.path.join(self.model_dir, 'scaler.pkl')
+            self.scaler = joblib.load(scaler_path)
+            self.expected_features = self.scaler.n_features_in_
+            print(f"  ✓ Scaler loaded (expects {self.expected_features} features)")
+        except Exception as e:
+            raise Exception(f"Failed to load scaler: {e}")
+        
+        # Load label encoder
+        try:
+            encoder_path = os.path.join(self.model_dir, 'label_encoder.pkl')
+            self.label_encoder = joblib.load(encoder_path)
+            print(f"  ✓ Label encoder loaded ({len(self.label_encoder.classes_)} attack types)")
+        except Exception as e:
+            raise Exception(f"Failed to load label encoder: {e}")
+        
+        # Load feature names (CRITICAL for XAI and intelligent mapping)
+        try:
+            feature_names_path = os.path.join(self.model_dir, 'selected_feature_names.pkl')
+            self.feature_names = joblib.load(feature_names_path)
+            self.training_feature_names = self.feature_names.copy()
+            print(f"  ✓ Feature names loaded ({len(self.feature_names)} features)")
+        except FileNotFoundError:
+            try:
+                orig_names_path = os.path.join(self.model_dir, 'feature_names.pkl')
+                all_names = joblib.load(orig_names_path)
+                self.feature_names = all_names[:self.expected_features]
+                self.training_feature_names = self.feature_names.copy()
+                print(f"  ✓ Using original feature names (truncated to {len(self.feature_names)})")
+            except:
+                self.feature_names = [f"Feature_{i+1}" for i in range(self.expected_features)]
+                self.training_feature_names = self.feature_names.copy()
+                print(f"  ⚠️  Using generic feature names")
+        
+        # Verify feature count
+        if len(self.feature_names) != self.expected_features:
+            if len(self.feature_names) > self.expected_features:
+                self.feature_names = self.feature_names[:self.expected_features]
+            else:
+                self.feature_names.extend([f"Feature_{i}" for i in range(len(self.feature_names), self.expected_features)])
+        
+        # Load selectors
+        try:
+            var_selector_path = os.path.join(self.model_dir, 'variance_selector.pkl')
+            self.variance_selector = joblib.load(var_selector_path)
+            print("  ✓ Variance selector loaded")
+        except:
+            print(f"  ⚠️  Variance selector not found")
+        
+        try:
+            kbest_path = os.path.join(self.model_dir, 'kbest_selector.pkl')
+            self.kbest_selector = joblib.load(kbest_path)
+            print("  ✓ SelectKBest selector loaded")
+        except:
+            print(f"  ⚠️  SelectKBest selector not found")
+        
+        # Load class weights
+        try:
+            class_weights_path = os.path.join(self.model_dir, 'class_weights.pkl')
+            self.class_weights = joblib.load(class_weights_path)
+            print("  ✓ Class weights loaded")
+        except:
+            print(f"  ℹ️  Class weights not found (optional)")
+        
+        # Load metadata
+        try:
+            metadata_path = os.path.join(self.model_dir, 'metadata.json')
+            with open(metadata_path, 'r') as f:
+                self.metadata = json.load(f)
+            print("  ✓ Metadata loaded")
+        except:
+            print(f"  ⚠️  Metadata not found")
+        
+        # Load models
+        print("\n🤖 Loading trained models...")
+        results_dir = os.path.join(self.model_dir, 'model_results')
+        if not os.path.exists(results_dir):
+            results_dir = self.model_dir
+        
+        model_files = {
+            'xgboost': 'xgboost_model.pkl',
+            'random_forest': 'random_forest_model.pkl',
+            'decision_tree': 'decision_tree_model.pkl',
+            'lightgbm': 'lightgbm_model.pkl',
+            'gradient_boosting': 'gradient_boosting_model.pkl',
+            'ml_ensemble': 'ml_ensemble_model.pkl',
+        }
+        
+        for model_name, filename in model_files.items():
+            try:
+                model_path = os.path.join(results_dir, filename)
+                if os.path.exists(model_path):
+                    self.models[model_name] = joblib.load(model_path)
+                    print(f"  ✓ {model_name.upper()} loaded")
+            except Exception as e:
+                print(f"  ⚠️  Could not load {model_name}: {e}")
+        
+        if not self.models:
+            raise Exception("No models could be loaded!")
+        
+        print(f"\n✓ System initialized with {len(self.models)} model(s)")
+    
+    def initialize_explainers(self):
+        """Initialize LIME and SHAP explainers."""
+        print("\n🔍 Initializing Explainable AI components...")
+        
+        try:
+            X_train_path = os.path.join(self.model_dir, 'X_train.npy')
+            if not os.path.exists(X_train_path):
+                print("  ⚠️  X_train.npy not found - XAI will be limited")
+                return
+            
+            X_train = np.load(X_train_path)
+            sample_size = min(1000, len(X_train))
+            background_data = X_train[np.random.choice(len(X_train), sample_size, replace=False)]
+            
+            # LIME Explainer
+            self.lime_explainer = lime.lime_tabular.LimeTabularExplainer(
+                background_data,
+                feature_names=self.feature_names,
+                class_names=self.label_encoder.classes_.tolist(),
+                mode='classification',
+                discretize_continuous=True
+            )
+            print("  ✓ LIME explainer initialized")
+            
+            # SHAP Explainers
+            print("  🔧 Initializing SHAP explainers...")
+            tree_models = ['xgboost', 'random_forest', 'decision_tree', 'lightgbm', 'gradient_boosting']
+            
+            for model_name in tree_models:
+                if model_name in self.models:
+                    try:
+                        self.shap_explainers[model_name] = shap.TreeExplainer(
+                            self.models[model_name],
+                            background_data
+                        )
+                        print(f"    ✓ SHAP TreeExplainer for {model_name}")
+                    except Exception as e:
+                        print(f"    ⚠️  SHAP failed for {model_name}: {e}")
+            
+            if 'ml_ensemble' in self.models and 'ml_ensemble' not in self.shap_explainers:
+                try:
+                    shap_background = background_data[np.random.choice(len(background_data), 
+                                                                       min(50, len(background_data)), 
+                                                                       replace=False)]
+                    self.shap_explainers['ml_ensemble'] = shap.KernelExplainer(
+                        self.models['ml_ensemble'].predict_proba,
+                        shap_background
+                    )
+                    print(f"    ✓ SHAP KernelExplainer for ml_ensemble")
+                except Exception as e:
+                    print(f"    ⚠️  SHAP failed for ensemble: {e}")
+            
+            print(f"\n✅ XAI initialized with {len(self.shap_explainers)} SHAP explainer(s)")
+            
+        except Exception as e:
+            print(f"  ⚠️  XAI initialization failed: {e}")
+    
+    def intelligent_feature_mapping(self, df):
+        """
+        CRITICAL IMPROVEMENT: Intelligently map ANY CSV columns to training features.
+        This allows the system to work with non-CIC-IDS datasets.
+        """
+        print("\n🔧 Intelligent Feature Mapping...")
+        
+        # Remove label columns if present
+        label_cols = [col for col in df.columns if col.lower() in ['label', 'class', 'attack', 'category']]
+        if label_cols:
+            df = df.drop(columns=label_cols)
+            print(f"  Removed label columns: {label_cols}")
+        
+        # Remove non-numeric/irrelevant columns
+        drop_cols = ['Flow ID', 'Source IP', 'Destination IP', 'Src IP', 'Dst IP', 
+                    'Timestamp', 'Flow Byts/s', 'Flow Pkts/s', 'flow_id', 'src_ip', 
+                    'dst_ip', 'timestamp', 'source_ip', 'destination_ip']
+        
+        cols_to_drop = [col for col in df.columns if col in drop_cols or 
+                       col.lower() in [c.lower() for c in drop_cols]]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
+            print(f"  Dropped {len(cols_to_drop)} irrelevant columns")
+        
+        # Convert all to numeric
+        original_cols = df.columns.tolist()
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        df.fillna(0, inplace=True)
+        
+        # Try to match column names with training features (case-insensitive)
+        matched_features = []
+        training_feature_lower = [f.lower().strip() for f in self.training_feature_names]
+        
+        for col in df.columns:
+            col_lower = col.lower().strip()
+            if col_lower in training_feature_lower:
+                idx = training_feature_lower.index(col_lower)
+                matched_features.append(self.training_feature_names[idx])
+            else:
+                matched_features.append(col)
+        
+        df.columns = matched_features
+        
+        # Now align with expected features
+        current_features = df.shape[1]
+        
+        if current_features != self.expected_features:
+            if current_features < self.expected_features:
+                # Pad with zeros
+                missing_count = self.expected_features - current_features
+                padding = pd.DataFrame(
+                    np.zeros((len(df), missing_count)),
+                    columns=[f"missing_feature_{i}" for i in range(missing_count)],
+                    index=df.index
+                )
+                df = pd.concat([df, padding], axis=1)
+                print(f"  ⚠️  Added {missing_count} zero-padded features")
+            else:
+                # Truncate
+                df = df.iloc[:, :self.expected_features]
+                print(f"  ⚠️  Truncated to {self.expected_features} features")
+        
+        print(f"  ✓ Mapped: {len(original_cols)} → {self.expected_features} features")
+        
+        return df.values
+    
+    def preprocess_data(self, df):
+        """
+        IMPROVED: Preprocess ANY CSV file for prediction.
+        Uses intelligent feature mapping instead of assuming CIC-IDS format.
+        """
+        print("\n🔧 Preprocessing data...")
+        
+        original_shape = df.shape
+        df.columns = df.columns.str.strip()
+        
+        # Check for labels
+        has_labels = any(col.lower() in ['label', 'class', 'attack', 'category'] for col in df.columns)
+        
+        if has_labels:
+            label_cols = [col for col in df.columns if col.lower() in ['label', 'class', 'attack', 'category']]
+            label_col = label_cols[0]
+            true_labels = df[label_col].copy()
+        else:
+            true_labels = None
+        
+        # Remove duplicates BEFORE feature mapping
+        before_dup = len(df)
+        duplicate_mask = df.duplicated(keep='first')
+        df = df[~duplicate_mask].reset_index(drop=True)
+        
+        if len(df) < before_dup:
+            print(f"  Removed {before_dup - len(df)} duplicates")
+            if has_labels:
+                true_labels = true_labels[~duplicate_mask].reset_index(drop=True)
+        
+        # Handle inf/NaN
+        for col in df.columns:
+            if df[col].dtype in ['float64', 'int64', 'float32', 'int32']:
+                df[col].replace([np.inf, -np.inf], np.nan, inplace=True)
+                df[col].fillna(0, inplace=True)
+        
+        # USE INTELLIGENT FEATURE MAPPING
+        X = self.intelligent_feature_mapping(df)
+        
+        # Apply preprocessing pipeline
+        if self.scaler is not None:
+            X = self.scaler.transform(X)
+        
+        if self.variance_selector is not None:
+            X = self.variance_selector.transform(X)
+        
+        if self.kbest_selector is not None:
+            X = self.kbest_selector.transform(X)
+        
+        print(f"  ✓ Preprocessed: {original_shape} → {X.shape}")
+        
+        result = {'X': X, 'original_shape': original_shape}
+        if has_labels:
+            result['true_labels'] = true_labels
+        
+        return result
+    
+    def explain_with_lime(self, model, X, instance_idx, model_name):
+        """Generate LIME explanation."""
+        if self.lime_explainer is None:
+            return None
+        
+        try:
+            predict_fn = model.predict_proba
+            exp = self.lime_explainer.explain_instance(
+                X[instance_idx],
+                predict_fn,
+                num_features=10,
+                top_labels=3
+            )
+            
+            probs = predict_fn(X[instance_idx].reshape(1, -1))[0]
+            predicted_class = np.argmax(probs)
+            
+            feature_importance = exp.as_list(label=predicted_class)
+            
+            explanation = {
+                'instance_index': int(instance_idx),
+                'predicted_class': self.label_encoder.classes_[predicted_class],
+                'confidence': float(probs[predicted_class]),
+                'top_features': [
+                    {'feature': feat, 'contribution': float(imp)} 
+                    for feat, imp in feature_importance[:10]
+                ],
+                'all_probabilities': {
+                    self.label_encoder.classes_[i]: float(prob) 
+                    for i, prob in enumerate(probs)
+                }
+            }
+            
+            fig = exp.as_pyplot_figure(label=predicted_class)
+            plt.tight_layout()
+            
+            buffer = BytesIO()
+            plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+            buffer.seek(0)
+            explanation['visualization'] = base64.b64encode(buffer.read()).decode()
+            plt.close()
+            
+            return explanation
+            
+        except Exception as e:
+            print(f"  ⚠️  LIME failed: {e}")
+            return None
+    
+    def explain_with_shap(self, model_name, X, num_samples=10):
+        """Generate SHAP explanation - multi-class corrected."""
+        if model_name not in self.shap_explainers:
+            return None
+        
+        try:
+            explainer = self.shap_explainers[model_name]
+            indices = np.random.choice(len(X), min(num_samples, len(X)), replace=False)
+            X_sample = X[indices]
+            
+            shap_values = explainer.shap_values(X_sample)
+            
+            # Handle multi-class SHAP values
+            if isinstance(shap_values, list):
+                shap_values_for_plot = shap_values[0]
+                all_importances = [np.abs(sv).mean(axis=0) for sv in shap_values]
+                avg_importance = np.mean(all_importances, axis=0)
+            else:
+                shap_values_for_plot = shap_values
+                avg_importance = np.abs(shap_values).mean(axis=0)
+            
+            # Ensure shapes match
+            if shap_values_for_plot.shape[1] != len(self.feature_names):
+                min_features = min(shap_values_for_plot.shape[1], len(self.feature_names))
+                shap_values_for_plot = shap_values_for_plot[:, :min_features]
+                X_sample_plot = X_sample[:, :min_features]
+                feature_names_plot = self.feature_names[:min_features]
+                avg_importance = avg_importance[:min_features]
+            else:
+                X_sample_plot = X_sample
+                feature_names_plot = self.feature_names
+            
+            # Create summary plot
+            plt.figure(figsize=(10, 6))
+            shap.summary_plot(
+                shap_values_for_plot, 
+                X_sample_plot,
+                feature_names=feature_names_plot,
+                show=False,
+                plot_size=(10, 6)
+            )
+            plt.tight_layout()
+            
+            buffer = BytesIO()
+            plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
+            buffer.seek(0)
+            image_base64 = base64.b64encode(buffer.read()).decode()
+            plt.close()
+            
+            # Get top features
+            avg_importance = np.asarray(avg_importance).flatten()
+            num_top = min(10, len(avg_importance))
+            top_indices = np.argsort(avg_importance)[-num_top:][::-1]
+            
+            top_features_dict = {}
+            for idx in top_indices:
+                idx = int(idx)
+                if idx < len(feature_names_plot):
+                    feature_name = feature_names_plot[idx]
+                    importance_value = float(avg_importance[idx])
+                    top_features_dict[feature_name] = importance_value
+            
+            explanation = {
+                'model': model_name,
+                'num_samples_explained': len(X_sample),
+                'visualization': image_base64,
+                'top_features': top_features_dict
+            }
+            
+            return explanation
+            
+        except Exception as e:
+            print(f"  ⚠️  SHAP failed: {e}")
+            return None
+    
+    def predict_with_model(self, X, model_name='xgboost'):
+        """Make predictions."""
+        if model_name not in self.models:
+            available = ', '.join(self.models.keys())
+            raise ValueError(f"Model '{model_name}' not found. Available: {available}")
+        
+        model = self.models[model_name]
+        predictions = model.predict(X)
+        probabilities = model.predict_proba(X)
+        
+        return predictions, probabilities
+    
+    def analyze_file(self, csv_file_path, model_name='xgboost', 
+                    explain_samples=5, save_results=True, output_dir=None):
+        """
+        IMPROVED: Analyze ANY CSV file with XAI explanations.
+        No longer assumes CIC-IDS format.
+        """
+        print("\n" + "="*80)
+        print(f"ANALYZING: {os.path.basename(csv_file_path)}")
+        print(f"MODEL: {model_name.upper()}")
+        print("="*80)
+        
+        start_time = datetime.now()
+        
+        # Load CSV with better encoding handling
+        try:
+            df = pd.read_csv(csv_file_path, low_memory=False, encoding='utf-8')
+            print(f"\n📁 Loaded {len(df):,} rows, {len(df.columns)} columns")
+        except UnicodeDecodeError:
+            try:
+                df = pd.read_csv(csv_file_path, low_memory=False, encoding='latin-1')
+                print(f"\n📁 Loaded {len(df):,} rows, {len(df.columns)} columns (latin-1)")
+            except Exception as e:
+                return {'error': f"Failed to load CSV: {e}"}
+        except Exception as e:
+            return {'error': f"Failed to load CSV: {e}"}
+        
+        # Preprocess with intelligent feature mapping
+        preprocessed = self.preprocess_data(df.copy())
+        X = preprocessed['X']
+        has_labels = 'true_labels' in preprocessed
+        
+        # Predict
+        print(f"\n🤖 Detecting intrusions with {model_name.upper()}...")
+        predictions, probabilities = self.predict_with_model(X, model_name)
+        predicted_labels = self.label_encoder.inverse_transform(predictions)
+        
+        # Detection summary
+        unique, counts = np.unique(predicted_labels, return_counts=True)
+        detection_summary = {}
+        
+        for label, count in zip(unique, counts):
+            detection_summary[str(label)] = {
+                'count': int(count),
+                'percentage': round(count/len(predictions)*100, 2)
+            }
+        
+        print("\n📊 Detection Results:")
+        for label, data in sorted(detection_summary.items(), key=lambda x: x[1]['count'], reverse=True):
+            print(f"  {label:30s} {data['count']:>8,} ({data['percentage']:>6.2f}%)")
+        
+        benign_count = sum(c for l, c in zip(unique, counts) 
+                          if 'BENIGN' in str(l).upper() or 'NORMAL' in str(l).upper())
+        attack_count = len(predictions) - benign_count
+        
+        print(f"\n  Total Benign:  {benign_count:,} ({benign_count/len(predictions)*100:.2f}%)")
+        print(f"  Total Attacks: {attack_count:,} ({attack_count/len(predictions)*100:.2f}%)")
+        
+        # Generate explanations
+        print(f"\n🔍 Generating XAI Explanations...")
+        explanations = {
+            'lime_explanations': [],
+            'shap_explanation': None
+        }
+        
+        model = self.models[model_name]
+        
+        # LIME explanations
+        if self.lime_explainer and explain_samples > 0:
+            print(f"\n  LIME: Explaining {explain_samples} samples...")
+            
+            benign_idx = np.where(predictions == 0)[0] if 0 in predictions else []
+            attack_idx = np.where(predictions != 0)[0] if np.any(predictions != 0) else []
+            
+            sample_indices = []
+            if len(benign_idx) > 0:
+                n_benign = min(explain_samples // 2, len(benign_idx))
+                sample_indices.extend(np.random.choice(benign_idx, n_benign, replace=False))
+            
+            if len(attack_idx) > 0:
+                n_attack = min(explain_samples - len(sample_indices), len(attack_idx))
+                sample_indices.extend(np.random.choice(attack_idx, n_attack, replace=False))
+            
+            for idx in sample_indices:
+                lime_exp = self.explain_with_lime(model, X, idx, model_name)
+                if lime_exp:
+                    explanations['lime_explanations'].append(lime_exp)
+            
+            print(f"    ✓ Generated {len(explanations['lime_explanations'])} LIME explanations")
+        
+        # SHAP explanation
+        if model_name in self.shap_explainers:
+            print(f"\n  SHAP: Analyzing feature importance...")
+            shap_exp = self.explain_with_shap(model_name, X, num_samples=min(50, len(X)))
+            if shap_exp:
+                explanations['shap_explanation'] = shap_exp
+                print(f"    ✓ SHAP analysis complete")
+        
+        end_time = datetime.now()
+        processing_time = (end_time - start_time).total_seconds()
+        
+        results = {
+            'file': os.path.basename(csv_file_path),
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'model_used': model_name,
+            'total_samples': int(len(predictions)),
+            'processing_time_seconds': round(processing_time, 2),
+            'samples_per_second': round(len(predictions) / processing_time, 2),
+            'detection_summary': detection_summary,
+            'benign_count': int(benign_count),
+            'attack_count': int(attack_count),
+            'benign_percentage': round(benign_count/len(predictions)*100, 2),
+            'attack_percentage': round(attack_count/len(predictions)*100, 2),
+            'average_confidence': round(float(np.mean(probabilities.max(axis=1))), 4),
+            'explanations': explanations
+        }
+        
+        # Validation if labels present
+        if has_labels:
+            try:
+                from sklearn.metrics import accuracy_score
+                true_labels = preprocessed['true_labels']
+                
+                try:
+                    true_labels_encoded = self.label_encoder.transform(true_labels)
+                    accuracy = accuracy_score(true_labels_encoded, predictions)
+                    results['validation'] = {
+                        'accuracy': round(float(accuracy), 4),
+                        'accuracy_percentage': round(accuracy * 100, 2)
+                    }
+                    print(f"\n🎯 Accuracy: {accuracy*100:.2f}%")
+                except (ValueError, TypeError):
+                    print(f"\n⚠️  Could not validate: labels don't match training data")
+                    results['validation'] = {'note': 'Labels do not match training data'}
+            except Exception as e:
+                print(f"\n⚠️  Validation error: {e}")
+        
+        print(f"\n⏱️  Processing time: {processing_time:.2f}s ({results['samples_per_second']:.0f} samples/sec)")
+        print("="*80)
+        
+        # Save results
+        if save_results:
+            if output_dir is None:
+                output_dir = os.path.dirname(csv_file_path)
+            
+            os.makedirs(output_dir, exist_ok=True)
+            
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            base_filename = os.path.splitext(os.path.basename(csv_file_path))[0]
+            json_path = os.path.join(output_dir, f"ids_report_{base_filename}_{timestamp}.json")
+            
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=2, default=str, ensure_ascii=False)
+            
+            print(f"\n💾 Report saved: {json_path}")
+        
+        return results
+
+
+if __name__ == "__main__":
+    MODEL_DIR = r'location of_processed_cicids_final_folder'
+    
+    print("\n" + "="*80)
+    print("INITIALIZING EXPLAINABLE NIDS")
+    print("Works with ANY network traffic CSV")
+    print("="*80)
+    
+    try:
+        detector = ExplainableNIDSDetector(model_dir=MODEL_DIR)
+    except Exception as e:
+        print(f"\n❌ Initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        exit(1)
+    
+    test_file = r'location of one cic ids dataset file to test, it is in csv'
+    
+    if os.path.exists(test_file):
+        print(f"\n📂 Test file found: {os.path.basename(test_file)}")
+        
+        results = detector.analyze_file(
+            csv_file_path=test_file,
+            model_name='xgboost',
+            explain_samples=5,
+            save_results=True,
+            output_dir=os.path.dirname(test_file)
+        )
+        
+        if 'error' not in results:
+            print("\n" + "="*80)
+            print("✅ ANALYSIS COMPLETE!")
+            print("="*80)
+        else:
+            print(f"\n❌ Error: {results['error']}")
+    else:
+        print(f"\n⚠️  Test file not found: {test_file}")

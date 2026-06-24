@@ -1,0 +1,425 @@
+Code for backend
+
+to run this file first go into that folder where saved by using command cd <folder_name>
+then run this command python nids_backend_final.py
+
+
+nids_backend_final.py
+
+
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+import os
+import tempfile
+import json
+from datetime import datetime
+from werkzeug.utils import secure_filename
+import traceback
+
+# Import XAI detection system
+import sys
+sys.path.insert(0, r'location_of_main_folder')
+from realtime_ids import ExplainableNIDSDetector
+
+app = Flask(__name__)
+CORS(app)
+
+# Configuration
+MODEL_DIR = r'location_of_processed_cicids_final_folder'
+UPLOAD_FOLDER = tempfile.gettempdir()
+ALLOWED_EXTENSIONS = {'csv'}
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
+
+# Initialize detector
+print("="*80)
+print("Initializing Explainable NIDS Backend...")
+print("="*80)
+try:
+    detector = ExplainableNIDSDetector(model_dir=MODEL_DIR)
+    print("\n✅ XAI Detector initialized successfully!")
+    print(f"Available models: {', '.join(detector.models.keys())}")
+except Exception as e:
+    print(f"\n❌ Failed to initialize detector: {e}")
+    traceback.print_exc()
+    detector = None
+
+
+def allowed_file(filename):
+    """Check if file extension is allowed."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.route('/')
+def index():
+    """Serve the dashboard HTML."""
+    try:
+        return send_file('nids_dashboard.html')
+    except FileNotFoundError:
+        return jsonify({'error': 'Dashboard not found. Please ensure nids_dashboard.html is in the same directory.'}), 404
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return jsonify({
+        'status': 'healthy' if detector else 'error',
+        'message': 'XAI-NIDS system is running' if detector else 'Detector not initialized',
+        'xai_enabled': True,
+        'models_available': list(detector.models.keys()) if detector else [],
+        'max_file_size_mb': 500,
+        'supports_any_csv': True,
+        'timestamp': datetime.now().isoformat()
+    })
+
+
+@app.route('/analyze', methods=['POST'])
+def analyze_file():
+    """
+    Analyze uploaded CSV file with Explainable AI.
+    IMPROVED: Better error messages and validation
+    """
+    if detector is None:
+        return jsonify({
+            'error': 'Detection system not initialized',
+            'details': 'The AI model could not be loaded. Please check server logs.',
+            'suggestion': 'Ensure model files are present in the correct directory.'
+        }), 500
+    
+    # Validate file upload
+    if 'file' not in request.files:
+        return jsonify({
+            'error': 'No file uploaded',
+            'details': 'The request did not contain a file.',
+            'suggestion': 'Please select a CSV file to analyze.'
+        }), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({
+            'error': 'No file selected',
+            'details': 'File field was empty.',
+            'suggestion': 'Please select a CSV file before clicking Analyze.'
+        }), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({
+            'error': 'Invalid file type',
+            'details': f'File "{file.filename}" is not a CSV file.',
+            'suggestion': 'Only .csv files are supported. Please upload a CSV file.',
+            'file_received': file.filename
+        }), 400
+    
+    # Get parameters
+    model_name = request.form.get('model', 'xgboost')
+    try:
+        explain_samples = int(request.form.get('explain_samples', 5))
+        if explain_samples < 1 or explain_samples > 20:
+            explain_samples = 5
+    except ValueError:
+        explain_samples = 5
+    
+    # Validate model
+    if model_name not in detector.models:
+        return jsonify({
+            'error': f'Invalid model: {model_name}',
+            'available_models': list(detector.models.keys()),
+            'suggestion': f'Please select one of: {", ".join(detector.models.keys())}'
+        }), 400
+    
+    temp_path = None
+    try:
+        # Save uploaded file
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        temp_path = os.path.join(
+            app.config['UPLOAD_FOLDER'], 
+            f"nids_{timestamp}_{filename}"
+        )
+        file.save(temp_path)
+        
+        # Check file size
+        file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+        
+        print(f"\n{'='*80}")
+        print(f"Processing: {filename}")
+        print(f"File size: {file_size_mb:.2f} MB")
+        print(f"Model: {model_name}")
+        print(f"XAI samples: {explain_samples}")
+        print(f"{'='*80}\n")
+        
+        # Validate CSV can be read
+        try:
+            import pandas as pd
+            test_df = pd.read_csv(temp_path, nrows=5)
+            print(f"✓ CSV validated: {len(test_df.columns)} columns detected")
+            del test_df
+        except Exception as csv_error:
+            return jsonify({
+                'error': 'Invalid CSV file',
+                'details': str(csv_error),
+                'suggestion': 'The file appears to be corrupted or not a valid CSV. Please check the file format.'
+            }), 400
+        
+        # Analyze with XAI
+        output_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'xai_results')
+        os.makedirs(output_dir, exist_ok=True)
+        
+        results = detector.analyze_file(
+            csv_file_path=temp_path,
+            model_name=model_name,
+            explain_samples=explain_samples,
+            save_results=True,
+            output_dir=output_dir
+        )
+        
+        # Clean up temp file
+        try:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception as cleanup_error:
+            print(f"⚠️  Could not delete temp file: {cleanup_error}")
+        
+        # Check for errors in results
+        if 'error' in results:
+            return jsonify({
+                'error': 'Analysis failed',
+                'details': results['error'],
+                'suggestion': 'The file may have an incompatible format or missing required columns.',
+                'file_info': {
+                    'name': filename,
+                    'size_mb': round(file_size_mb, 2)
+                }
+            }), 500
+        
+        print(f"\n✅ Analysis complete!")
+        print(f"   Processed: {results['total_samples']:,} samples")
+        print(f"   Attacks: {results['attack_count']:,} ({results['attack_percentage']}%)")
+        print(f"   Benign: {results['benign_count']:,} ({results['benign_percentage']}%)")
+        print(f"{'='*80}\n")
+        
+        # Add file info to results
+        results['file_info'] = {
+            'name': filename,
+            'size_mb': round(file_size_mb, 2),
+            'analysis_timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(results)
+    
+    except MemoryError:
+        # Clean up on memory error
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+        
+        return jsonify({
+            'error': 'Out of memory',
+            'details': 'The file is too large to process with available memory.',
+            'suggestion': 'Try a smaller file or reduce the number of samples to explain.',
+            'file_size_mb': round(file_size_mb, 2) if 'file_size_mb' in locals() else 'unknown'
+        }), 507
+    
+    except Exception as e:
+        # Clean up on error
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+        
+        print(f"\n❌ Analysis Error: {e}")
+        traceback.print_exc()
+        
+        error_message = str(e)
+        
+        # Provide helpful suggestions based on error type
+        suggestion = 'Please check the file format and try again.'
+        
+        if 'UnicodeDecodeError' in error_message or 'encoding' in error_message.lower():
+            suggestion = 'The file has encoding issues. Try saving it as UTF-8 encoded CSV.'
+        elif 'KeyError' in error_message or 'column' in error_message.lower():
+            suggestion = 'Some expected columns may be missing. Ensure your CSV has network traffic features.'
+        elif 'memory' in error_message.lower():
+            suggestion = 'File is too large. Try a smaller dataset or reduce explain_samples parameter.'
+        
+        return jsonify({
+            'error': 'Analysis failed',
+            'details': error_message,
+            'suggestion': suggestion,
+            'error_type': type(e).__name__
+        }), 500
+
+
+@app.route('/models', methods=['GET'])
+def get_models():
+    """Get list of available models with details."""
+    if detector is None:
+        return jsonify({'error': 'Detector not initialized'}), 500
+    
+    model_info = {
+        'xgboost': {
+            'name': 'XGBoost',
+            'description': 'Gradient boosting - Best overall performance',
+            'recommended': True,
+            'speed': 'Fast',
+            'accuracy': 'Very High'
+        },
+        'random_forest': {
+            'name': 'Random Forest',
+            'description': 'Ensemble of decision trees - Robust and reliable',
+            'recommended': False,
+            'speed': 'Medium',
+            'accuracy': 'High'
+        },
+        'decision_tree': {
+            'name': 'Decision Tree',
+            'description': 'Single tree - Most interpretable',
+            'recommended': False,
+            'speed': 'Very Fast',
+            'accuracy': 'Medium'
+        },
+        'lightgbm': {
+            'name': 'LightGBM',
+            'description': 'Fast gradient boosting - Memory efficient',
+            'recommended': False,
+            'speed': 'Very Fast',
+            'accuracy': 'Very High'
+        },
+        'gradient_boosting': {
+            'name': 'Gradient Boosting',
+            'description': 'Classic gradient boosting',
+            'recommended': False,
+            'speed': 'Slow',
+            'accuracy': 'High'
+        },
+        'ml_ensemble': {
+            'name': 'ML Ensemble',
+            'description': 'Voting classifier - Combines all ML models',
+            'recommended': False,
+            'speed': 'Slow',
+            'accuracy': 'Very High'
+        }
+    }
+    
+    available_models = []
+    for model_key in detector.models.keys():
+        info = model_info.get(model_key, {
+            'name': model_key.replace('_', ' ').title(),
+            'description': 'Custom model',
+            'recommended': False,
+            'speed': 'Unknown',
+            'accuracy': 'Unknown'
+        })
+        info['key'] = model_key
+        available_models.append(info)
+    
+    return jsonify({
+        'models': available_models,
+        'default': 'xgboost',
+        'recommended': 'xgboost',
+        'count': len(available_models)
+    })
+
+
+@app.route('/stats', methods=['GET'])
+def get_stats():
+    """Get system statistics."""
+    if detector is None:
+        return jsonify({'error': 'Detector not initialized'}), 500
+    
+    return jsonify({
+        'attack_types': detector.label_encoder.classes_.tolist(),
+        'num_attack_types': len(detector.label_encoder.classes_),
+        'available_models': list(detector.models.keys()),
+        'num_models': len(detector.models),
+        'expected_features': int(detector.expected_features),
+        'num_selected_features': len(detector.feature_names) if detector.feature_names else 0,
+        'feature_names_loaded': detector.feature_names is not None,
+        'sample_features': detector.feature_names[:5] if detector.feature_names else [],
+        'xai_enabled': True,
+        'lime_available': detector.lime_explainer is not None,
+        'shap_available': len(detector.shap_explainers) > 0,
+        'shap_models': list(detector.shap_explainers.keys()),
+        'class_weights_loaded': detector.class_weights is not None,
+        'max_file_size_mb': 500,
+        'supports_any_csv': True,
+        'intelligent_feature_mapping': True,
+        'status': 'ready'
+    })
+
+
+@app.route('/test', methods=['GET'])
+def test_endpoint():
+    """Test endpoint to verify backend is running."""
+    return jsonify({
+        'status': 'Backend is running!',
+        'detector_status': 'initialized' if detector else 'not initialized',
+        'max_file_size_mb': 500,
+        'supports_any_csv': True,
+        'xai_enabled': True,
+        'timestamp': datetime.now().isoformat()
+    })
+
+
+# Error handlers
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    """Handle file too large error."""
+    return jsonify({
+        'error': 'File too large',
+        'details': 'The uploaded file exceeds the maximum size of 500MB',
+        'max_size_mb': 500,
+        'suggestion': 'Please upload a smaller file or process your data in chunks.'
+    }), 413
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    """Handle internal server errors."""
+    return jsonify({
+        'error': 'Internal server error',
+        'details': 'An unexpected error occurred on the server',
+        'suggestion': 'Please try again or contact support if the issue persists.'
+    }), 500
+
+
+@app.errorhandler(404)
+def not_found(error):
+    """Handle not found errors."""
+    return jsonify({
+        'error': 'Not found',
+        'details': 'The requested resource was not found',
+        'suggestion': 'Please check the URL and try again.'
+    }), 404
+
+
+if __name__ == '__main__':
+    print("\n" + "="*80)
+    print("EXPLAINABLE NIDS DASHBOARD SERVER")
+    print("Powered by LIME + SHAP | Works with ANY CSV")
+    print("="*80)
+    
+    if detector:
+        print(f"\n✅ System Ready!")
+        print(f"   Models: {len(detector.models)}")
+        print(f"   Attack Types: {len(detector.label_encoder.classes_)}")
+        print(f"   Features: {len(detector.feature_names) if detector.feature_names else 0}")
+        print(f"   LIME: {'✓' if detector.lime_explainer else '✗'}")
+        print(f"   SHAP: {'✓' if detector.shap_explainers else '✗'}")
+        print(f"   Max file size: 500MB")
+        print(f"   Supports ANY CSV: ✓")
+    else:
+        print("\n⚠️  Warning: Detector not initialized!")
+    
+    print("\n🚀 Starting Flask server...")
+    print("\n📊 Dashboard: http://localhost:5000")
+    print("📡 API Health: http://localhost:5000/health")
+    print("🔧 Test Endpoint: http://localhost:5000/test")
+    print("\n" + "="*80 + "\n")
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)

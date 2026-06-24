@@ -1,0 +1,971 @@
+Code for model training
+
+to run this file first go into that folder where saved by using command cd <folder_name>
+then run this command python model_training_final.py
+
+
+model_training_final.py 
+
+
+import numpy as np
+import pandas as pd
+import joblib
+import json
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier, GradientBoostingClassifier
+from sklearn.metrics import (classification_report, confusion_matrix, 
+                            accuracy_score, precision_recall_fscore_support)
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import (Dense, Dropout, Conv1D, MaxPooling1D, 
+                                     Flatten, LSTM, BatchNormalization, Input,
+                                     Reshape, Concatenate, GlobalAveragePooling1D,
+                                     Bidirectional, Multiply)
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+import warnings
+warnings.filterwarnings('ignore')
+
+np.random.seed(42)
+tf.random.set_seed(42)
+
+class IDSModelTrainer:
+    """
+    Complete IDS Model Trainer with:
+    - All original ML models (unchanged)
+    - Fixed CNN/LSTM for tabular data
+    - Working hybrid models
+    """
+    
+    def __init__(self, data_dir):
+        self.data_dir = data_dir
+        self.models = {}
+        self.results = {}
+        self.label_encoder = None
+        self.class_weights = None
+        self.sample_weights = None
+        self.num_classes = None
+        self.feature_names = None
+        self.selected_feature_names = None
+        
+        self.load_data()
+        
+        import os
+        self.results_dir = os.path.join(data_dir, 'model_results')
+        os.makedirs(self.results_dir, exist_ok=True)
+    
+    def load_data(self):
+        """Load preprocessed data and all artifacts."""
+        print("="*80)
+        print("LOADING PREPROCESSED DATA")
+        print("="*80)
+        
+        self.X_train = np.load(f'{self.data_dir}/X_train.npy')
+        self.X_test = np.load(f'{self.data_dir}/X_test.npy')
+        self.y_train = np.load(f'{self.data_dir}/y_train.npy')
+        self.y_test = np.load(f'{self.data_dir}/y_test.npy')
+        
+        self.label_encoder = joblib.load(f'{self.data_dir}/label_encoder.pkl')
+        
+        try:
+            self.selected_feature_names = joblib.load(f'{self.data_dir}/selected_feature_names.pkl')
+            print(f"\n✅ Loaded {len(self.selected_feature_names)} selected feature names")
+        except FileNotFoundError:
+            try:
+                self.feature_names = joblib.load(f'{self.data_dir}/feature_names.pkl')
+                self.selected_feature_names = self.feature_names[:self.X_train.shape[1]]
+            except FileNotFoundError:
+                self.selected_feature_names = [f'feature_{i}' for i in range(self.X_train.shape[1])]
+        
+        if len(self.selected_feature_names) != self.X_train.shape[1]:
+            if len(self.selected_feature_names) > self.X_train.shape[1]:
+                self.selected_feature_names = self.selected_feature_names[:self.X_train.shape[1]]
+            else:
+                self.selected_feature_names.extend([f'feature_{i}' for i in range(len(self.selected_feature_names), self.X_train.shape[1])])
+        
+        try:
+            self.class_weights = joblib.load(f'{self.data_dir}/class_weights.pkl')
+            self.sample_weights = np.array([self.class_weights[y] for y in self.y_train])
+            print("\n✅ Class weights loaded successfully")
+        except FileNotFoundError:
+            print("\n⚠️  WARNING: class_weights.pkl not found!")
+            self.class_weights = None
+            self.sample_weights = None
+        
+        self.num_classes = len(np.unique(self.y_train))
+        
+        print(f"\n📊 Dataset Summary:")
+        print(f"  Training: {self.X_train.shape[0]:,} samples, {self.X_train.shape[1]} features")
+        print(f"  Testing: {self.X_test.shape[0]:,} samples")
+        print(f"  Classes: {self.num_classes}")
+    
+    def evaluate_model(self, model, model_name, y_pred=None, is_dl=False):
+        """Evaluate a model and store results."""
+        print(f"\n{'='*80}")
+        print(f"EVALUATING {model_name.upper()}")
+        print(f"{'='*80}")
+        
+        if y_pred is None:
+            if is_dl:
+                y_pred_proba = model.predict(self.X_test, verbose=0)
+                y_pred = np.argmax(y_pred_proba, axis=1)
+            else:
+                y_pred = model.predict(self.X_test)
+        
+        accuracy = accuracy_score(self.y_test, y_pred)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            self.y_test, y_pred, average='weighted', zero_division=0
+        )
+        
+        print(f"\n📊 Overall Metrics:")
+        print(f"  Accuracy:  {accuracy:.4f} ({accuracy*100:.2f}%)")
+        print(f"  Precision: {precision:.4f}")
+        print(f"  Recall:    {recall:.4f}")
+        print(f"  F1-Score:  {f1:.4f}")
+        
+        unique_classes = np.unique(self.y_test)
+        class_names = [self.label_encoder.inverse_transform([c])[0] for c in unique_classes]
+        
+        report = classification_report(
+            self.y_test, y_pred,
+            labels=unique_classes,
+            target_names=class_names,
+            zero_division=0
+        )
+        print(f"\n📋 Per-Class Performance:")
+        print(report)
+        
+        self.results[model_name] = {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1,
+            'predictions': y_pred,
+            'report': report
+        }
+        
+        self.plot_confusion_matrix(self.y_test, y_pred, model_name, class_names)
+        
+        return accuracy, precision, recall, f1
+    
+    def plot_confusion_matrix(self, y_true, y_pred, model_name, class_names):
+        """Plot and save confusion matrix."""
+        cm = confusion_matrix(y_true, y_pred)
+        
+        plt.figure(figsize=(max(10, len(class_names)), max(8, len(class_names))))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                   xticklabels=class_names,
+                   yticklabels=class_names,
+                   cbar_kws={'label': 'Count'})
+        plt.title(f'Confusion Matrix - {model_name}', fontsize=14, fontweight='bold')
+        plt.ylabel('True Label', fontsize=12)
+        plt.xlabel('Predicted Label', fontsize=12)
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        plt.tight_layout()
+        
+        filename = f'{self.results_dir}/cm_{model_name.lower().replace(" ", "_")}.png'
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"  ✓ Confusion matrix saved: {filename}")
+    
+    # ========================================================================
+    # ORIGINAL ML MODELS (UNCHANGED - KEEP AS IS)
+    # ========================================================================
+    
+    def train_decision_tree(self):
+        """Train Decision Tree with class weights."""
+        print("\n" + "="*80)
+        print("TRAINING DECISION TREE")
+        print("="*80)
+        
+        model = DecisionTreeClassifier(
+            max_depth=20,
+            min_samples_split=10,
+            min_samples_leaf=5,
+            random_state=42
+        )
+        
+        if self.sample_weights is not None:
+            model.fit(self.X_train, self.y_train, sample_weight=self.sample_weights)
+        else:
+            model.fit(self.X_train, self.y_train)
+        
+        self.evaluate_model(model, "Decision Tree")
+        joblib.dump(model, f'{self.results_dir}/decision_tree_model.pkl')
+        
+        self.models['decision_tree'] = model
+        return model
+    
+    def train_random_forest(self):
+        """Train Random Forest with class weights."""
+        print("\n" + "="*80)
+        print("TRAINING RANDOM FOREST")
+        print("="*80)
+        
+        model = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=20,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1,
+            verbose=1
+        )
+        
+        if self.sample_weights is not None:
+            model.fit(self.X_train, self.y_train, sample_weight=self.sample_weights)
+        else:
+            model.fit(self.X_train, self.y_train)
+        
+        self.evaluate_model(model, "Random Forest")
+        joblib.dump(model, f'{self.results_dir}/random_forest_model.pkl')
+        
+        self.models['random_forest'] = model
+        return model
+    
+    def train_xgboost(self):
+        """Train XGBoost with class weights."""
+        print("\n" + "="*80)
+        print("TRAINING XGBOOST")
+        print("="*80)
+        
+        model = XGBClassifier(
+            n_estimators=100,
+            max_depth=10,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            n_jobs=-1,
+            verbosity=1,
+            eval_metric='mlogloss'
+        )
+        
+        if self.sample_weights is not None:
+            model.fit(self.X_train, self.y_train, sample_weight=self.sample_weights)
+        else:
+            model.fit(self.X_train, self.y_train)
+        
+        self.evaluate_model(model, "XGBoost")
+        joblib.dump(model, f'{self.results_dir}/xgboost_model.pkl')
+        
+        self.models['xgboost'] = model
+        return model
+    
+    def train_lightgbm(self):
+        """Train LightGBM with class weights."""
+        print("\n" + "="*80)
+        print("TRAINING LIGHTGBM")
+        print("="*80)
+        
+        model = LGBMClassifier(
+            n_estimators=100,
+            max_depth=10,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            n_jobs=-1,
+            verbose=1
+        )
+        
+        if self.sample_weights is not None:
+            model.fit(self.X_train, self.y_train, sample_weight=self.sample_weights)
+        else:
+            model.fit(self.X_train, self.y_train)
+        
+        self.evaluate_model(model, "LightGBM")
+        joblib.dump(model, f'{self.results_dir}/lightgbm_model.pkl')
+        
+        self.models['lightgbm'] = model
+        return model
+    
+    def train_gradient_boosting(self):
+        """Train Gradient Boosting with class weights."""
+        print("\n" + "="*80)
+        print("TRAINING GRADIENT BOOSTING")
+        print("="*80)
+        
+        model = GradientBoostingClassifier(
+            n_estimators=100,
+            max_depth=10,
+            learning_rate=0.1,
+            subsample=0.8,
+            random_state=42,
+            verbose=1
+        )
+        
+        if self.sample_weights is not None:
+            model.fit(self.X_train, self.y_train, sample_weight=self.sample_weights)
+        else:
+            model.fit(self.X_train, self.y_train)
+        
+        self.evaluate_model(model, "Gradient Boosting")
+        joblib.dump(model, f'{self.results_dir}/gradient_boosting_model.pkl')
+        
+        self.models['gradient_boosting'] = model
+        return model
+    
+    # ========================================================================
+    # CORRECTED DEEP LEARNING MODELS
+    # ========================================================================
+    
+    def create_cnn_model(self):
+        """
+        CORRECTED CNN for tabular data using Functional API.
+        Uses spatial transformation approach.
+        """
+        print("\nBuilding CORRECTED CNN for tabular data...")
+        
+        # Use Functional API to avoid input issues
+        inputs = Input(shape=(self.X_train.shape[1],), name='input_layer')
+        
+        # Reshape for Conv1D
+        x = Reshape((self.X_train.shape[1], 1))(inputs)
+        
+        # Spatial feature learning
+        x = Conv1D(64, kernel_size=3, activation='relu', padding='same')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+        
+        x = Conv1D(128, kernel_size=3, activation='relu', padding='same')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+        
+        # Global pooling instead of flattening
+        x = GlobalAveragePooling1D()(x)
+        
+        # Dense layers
+        x = Dense(128, activation='relu')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.5)(x)
+        
+        x = Dense(64, activation='relu')(x)
+        x = Dropout(0.3)(x)
+        
+        outputs = Dense(self.num_classes, activation='softmax')(x)
+        
+        model = Model(inputs=inputs, outputs=outputs, name='cnn_model')
+        
+        model.compile(
+            optimizer='adam',
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        print(f"✓ CNN model created (Functional API)")
+        model.summary()
+        
+        return model
+    
+    def train_cnn(self, epochs=20, batch_size=128):
+        """Train CNN with class weights."""
+        print("\n" + "="*80)
+        print("TRAINING CNN MODEL (CORRECTED)")
+        print("="*80)
+        
+        model = self.create_cnn_model()
+        
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, verbose=1),
+            ModelCheckpoint(f'{self.results_dir}/cnn_model_best.keras', 
+                          monitor='val_accuracy', save_best_only=True, verbose=1)
+        ]
+        
+        if self.class_weights is not None:
+            history = model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=epochs,
+                batch_size=batch_size,
+                callbacks=callbacks,
+                class_weight=self.class_weights,
+                verbose=1
+            )
+        else:
+            history = model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=epochs,
+                batch_size=batch_size,
+                callbacks=callbacks,
+                verbose=1
+            )
+        
+        self.plot_training_history(history, "CNN")
+        
+        y_pred_proba = model.predict(self.X_test, verbose=0)
+        y_pred = np.argmax(y_pred_proba, axis=1)
+        self.evaluate_model(model, "CNN", y_pred=y_pred, is_dl=True)
+        
+        model.save(f'{self.results_dir}/cnn_model_final.keras')
+        
+        self.models['cnn'] = model
+        return model, history
+    
+    def create_lstm_model(self):
+        """
+        CORRECTED LSTM for tabular data using Functional API.
+        Treats features as sequence with bidirectional learning.
+        """
+        print("\nBuilding CORRECTED LSTM for tabular data...")
+        
+        # Use Functional API
+        inputs = Input(shape=(self.X_train.shape[1],), name='input_layer')
+        
+        # Reshape for LSTM
+        x = Reshape((self.X_train.shape[1], 1))(inputs)
+        
+        # Bidirectional LSTM layers
+        x = Bidirectional(LSTM(64, return_sequences=True))(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+        
+        x = Bidirectional(LSTM(32))(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+        
+        # Dense layers
+        x = Dense(64, activation='relu')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.4)(x)
+        
+        x = Dense(32, activation='relu')(x)
+        x = Dropout(0.3)(x)
+        
+        outputs = Dense(self.num_classes, activation='softmax')(x)
+        
+        model = Model(inputs=inputs, outputs=outputs, name='lstm_model')
+        
+        model.compile(
+            optimizer='adam',
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        print(f"✓ LSTM model created (Functional API)")
+        model.summary()
+        
+        return model
+    
+    def train_lstm(self, epochs=20, batch_size=128):
+        """Train LSTM with class weights."""
+        print("\n" + "="*80)
+        print("TRAINING LSTM MODEL (CORRECTED)")
+        print("="*80)
+        
+        model = self.create_lstm_model()
+        
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, verbose=1),
+            ModelCheckpoint(f'{self.results_dir}/lstm_model_best.keras', 
+                          monitor='val_accuracy', save_best_only=True, verbose=1)
+        ]
+        
+        if self.class_weights is not None:
+            history = model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=epochs,
+                batch_size=batch_size,
+                callbacks=callbacks,
+                class_weight=self.class_weights,
+                verbose=1
+            )
+        else:
+            history = model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=epochs,
+                batch_size=batch_size,
+                callbacks=callbacks,
+                verbose=1
+            )
+        
+        self.plot_training_history(history, "LSTM")
+        
+        y_pred_proba = model.predict(self.X_test, verbose=0)
+        y_pred = np.argmax(y_pred_proba, axis=1)
+        self.evaluate_model(model, "LSTM", y_pred=y_pred, is_dl=True)
+        
+        model.save(f'{self.results_dir}/lstm_model_final.keras')
+        
+        self.models['lstm'] = model
+        return model, history
+    
+    # ========================================================================
+    # HYBRID MODELS (CORRECTED)
+    # ========================================================================
+    
+    def create_hybrid_dl_xgboost(self):
+        """
+        HYBRID TYPE 1: Deep Learning Feature Extractor + XGBoost
+        CORRECTED to use Functional API model properly
+        """
+        print("\n" + "="*80)
+        print("CREATING HYBRID MODEL: DL Feature Extractor + XGBoost")
+        print("="*80)
+        
+        # Create feature extractor model
+        print("\nBuilding DL feature extractor...")
+        inputs = Input(shape=(self.X_train.shape[1],), name='input_layer')
+        
+        x = Dense(256, activation='relu')(inputs)
+        x = BatchNormalization()(x)
+        x = Dropout(0.4)(x)
+        
+        x = Dense(128, activation='relu')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+        
+        x = Dense(64, activation='relu')(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+        
+        features = Dense(32, activation='relu', name='feature_layer')(x)  # Feature layer
+        
+        outputs = Dense(self.num_classes, activation='softmax')(features)
+        
+        # Full model for training
+        full_model = Model(inputs=inputs, outputs=outputs, name='feature_extractor_full')
+        
+        full_model.compile(
+            optimizer=keras.optimizers.Adam(learning_rate=0.001),
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        print("✓ Feature extractor model created")
+        
+        # Train the DL model
+        print("\nTraining DL feature extractor...")
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, verbose=1)
+        ]
+        
+        if self.class_weights is not None:
+            history = full_model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=15,
+                batch_size=128,
+                callbacks=callbacks,
+                class_weight=self.class_weights,
+                verbose=1
+            )
+        else:
+            history = full_model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=15,
+                batch_size=128,
+                callbacks=callbacks,
+                verbose=1
+            )
+        
+        # Create feature extractor (without final classification layer)
+        feature_extractor = Model(
+            inputs=full_model.input,
+            outputs=full_model.get_layer('feature_layer').output,
+            name='feature_extractor'
+        )
+        
+        print("\n✓ Extracting deep features...")
+        X_train_deep = feature_extractor.predict(self.X_train, verbose=0)
+        X_test_deep = feature_extractor.predict(self.X_test, verbose=0)
+        
+        print(f"Deep features shape: {X_train_deep.shape}")
+        
+        # Train XGBoost on deep features
+        print("\nTraining XGBoost on deep features...")
+        xgb_model = XGBClassifier(
+            n_estimators=100,
+            max_depth=8,
+            learning_rate=0.1,
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        if self.sample_weights is not None:
+            xgb_model.fit(X_train_deep, self.y_train, sample_weight=self.sample_weights)
+        else:
+            xgb_model.fit(X_train_deep, self.y_train)
+        
+        # Evaluate
+        y_pred = xgb_model.predict(X_test_deep)
+        self.evaluate_model(None, "Hybrid DL+XGBoost", y_pred=y_pred)
+        
+        # Save both components
+        feature_extractor.save(f'{self.results_dir}/hybrid_feature_extractor.keras')
+        joblib.dump(xgb_model, f'{self.results_dir}/hybrid_dl_xgboost.pkl')
+        
+        self.models['hybrid_dl_xgboost'] = {
+            'feature_extractor': feature_extractor,
+            'xgb_classifier': xgb_model
+        }
+        
+        print("\n✅ Hybrid DL+XGBoost model created!")
+        
+        return feature_extractor, xgb_model
+    
+    def create_hybrid_stacking(self):
+        """
+        HYBRID TYPE 2: Stacking Ensemble (ML + DL predictions)
+        """
+        print("\n" + "="*80)
+        print("CREATING HYBRID MODEL: Stacking Ensemble")
+        print("="*80)
+        
+        # Ensure base models exist
+        if 'xgboost' not in self.models:
+            print("Training XGBoost for stacking...")
+            self.train_xgboost()
+        
+        if 'random_forest' not in self.models:
+            print("Training Random Forest for stacking...")
+            self.train_random_forest()
+        
+        if 'cnn' not in self.models:
+            print("Training CNN for stacking...")
+            self.train_cnn(epochs=15)
+        
+        # Get base model predictions
+        print("\n✓ Generating base model predictions...")
+        
+        xgb_train_pred = self.models['xgboost'].predict_proba(self.X_train)
+        xgb_test_pred = self.models['xgboost'].predict_proba(self.X_test)
+        
+        rf_train_pred = self.models['random_forest'].predict_proba(self.X_train)
+        rf_test_pred = self.models['random_forest'].predict_proba(self.X_test)
+        
+        cnn_train_pred = self.models['cnn'].predict(self.X_train, verbose=0)
+        cnn_test_pred = self.models['cnn'].predict(self.X_test, verbose=0)
+        
+        # Stack predictions
+        X_train_meta = np.hstack([xgb_train_pred, rf_train_pred, cnn_train_pred])
+        X_test_meta = np.hstack([xgb_test_pred, rf_test_pred, cnn_test_pred])
+        
+        print(f"Meta-features shape: {X_train_meta.shape}")
+        
+        # Train meta-classifier
+        print("\nTraining meta-classifier (LightGBM)...")
+        meta_model = LGBMClassifier(
+            n_estimators=50,
+            max_depth=5,
+            learning_rate=0.1,
+            random_state=42,
+            n_jobs=-1
+        )
+        
+        if self.sample_weights is not None:
+            meta_model.fit(X_train_meta, self.y_train, sample_weight=self.sample_weights)
+        else:
+            meta_model.fit(X_train_meta, self.y_train)
+        
+        # Evaluate
+        y_pred = meta_model.predict(X_test_meta)
+        self.evaluate_model(None, "Hybrid Stacking", y_pred=y_pred)
+        
+        # Save
+        joblib.dump(meta_model, f'{self.results_dir}/hybrid_stacking_meta.pkl')
+        
+        self.models['hybrid_stacking'] = {
+            'base_models': ['xgboost', 'random_forest', 'cnn'],
+            'meta_classifier': meta_model
+        }
+        
+        print("\n✅ Hybrid Stacking model created!")
+        
+        return meta_model
+    
+    def create_hybrid_parallel(self):
+        """
+        HYBRID TYPE 3: Parallel architecture (original + learned features)
+        """
+        print("\n" + "="*80)
+        print("CREATING HYBRID MODEL: Parallel DL+Features")
+        print("="*80)
+        
+        inputs = Input(shape=(self.X_train.shape[1],), name='input_layer')
+        
+        # DL pathway
+        dl_path = Dense(128, activation='relu')(inputs)
+        dl_path = BatchNormalization()(dl_path)
+        dl_path = Dropout(0.3)(dl_path)
+        
+        dl_path = Dense(64, activation='relu')(dl_path)
+        dl_path = BatchNormalization()(dl_path)
+        dl_path = Dropout(0.2)(dl_path)
+        
+        dl_features = Dense(32, activation='relu', name='dl_features')(dl_path)
+        
+        # Combine original + learned features
+        combined = Concatenate()([inputs, dl_features])
+        
+        # Final classification
+        x = Dense(64, activation='relu')(combined)
+        x = Dropout(0.3)(x)
+        x = Dense(32, activation='relu')(x)
+        
+        outputs = Dense(self.num_classes, activation='softmax')(x)
+        
+        model = Model(inputs=inputs, outputs=outputs, name='hybrid_parallel')
+        
+        model.compile(
+            optimizer=keras.optimizers.Adam(learning_rate=0.001),
+            loss='sparse_categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        print("✓ Parallel hybrid model created")
+        model.summary()
+        
+        # Train
+        callbacks = [
+            EarlyStopping(monitor='val_loss', patience=7, restore_best_weights=True, verbose=1),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, verbose=1),
+            ModelCheckpoint(f'{self.results_dir}/hybrid_parallel_best.keras', 
+                          monitor='val_accuracy', save_best_only=True, verbose=1)
+        ]
+        
+        if self.class_weights is not None:
+            history = model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=20,
+                batch_size=128,
+                callbacks=callbacks,
+                class_weight=self.class_weights,
+                verbose=1
+            )
+        else:
+            history = model.fit(
+                self.X_train, self.y_train,
+                validation_split=0.2,
+                epochs=20,
+                batch_size=128,
+                callbacks=callbacks,
+                verbose=1
+            )
+        
+        self.plot_training_history(history, "Hybrid_Parallel")
+        
+        # Evaluate
+        y_pred_proba = model.predict(self.X_test, verbose=0)
+        y_pred = np.argmax(y_pred_proba, axis=1)
+        self.evaluate_model(model, "Hybrid Parallel", y_pred=y_pred, is_dl=True)
+        
+        model.save(f'{self.results_dir}/hybrid_parallel_final.keras')
+        
+        self.models['hybrid_parallel'] = model
+        
+        print("\n✅ Hybrid Parallel model created!")
+        
+        return model, history
+    
+    # ========================================================================
+    # ENSEMBLE & UTILITY
+    # ========================================================================
+    
+    def create_ml_ensemble(self):
+        """Create voting ensemble of ML models."""
+        print("\n" + "="*80)
+        print("CREATING ML ENSEMBLE")
+        print("="*80)
+        
+        if 'decision_tree' not in self.models:
+            self.train_decision_tree()
+        if 'random_forest' not in self.models:
+            self.train_random_forest()
+        if 'xgboost' not in self.models:
+            self.train_xgboost()
+        
+        ensemble = VotingClassifier(
+            estimators=[
+                ('dt', self.models['decision_tree']),
+                ('rf', self.models['random_forest']),
+                ('xgb', self.models['xgboost'])
+            ],
+            voting='soft',
+            n_jobs=-1
+        )
+        
+        print("Training ensemble...")
+        ensemble.fit(self.X_train, self.y_train)
+        
+        self.evaluate_model(ensemble, "ML Ensemble")
+        joblib.dump(ensemble, f'{self.results_dir}/ml_ensemble_model.pkl')
+        
+        self.models['ml_ensemble'] = ensemble
+        return ensemble
+    
+    def plot_training_history(self, history, model_name):
+        """Plot training history."""
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        axes[0].plot(history.history['accuracy'], label='Train', linewidth=2)
+        axes[0].plot(history.history['val_accuracy'], label='Validation', linewidth=2)
+        axes[0].set_title(f'{model_name} - Accuracy', fontsize=14, fontweight='bold')
+        axes[0].set_xlabel('Epoch')
+        axes[0].set_ylabel('Accuracy')
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        
+        axes[1].plot(history.history['loss'], label='Train', linewidth=2)
+        axes[1].plot(history.history['val_loss'], label='Validation', linewidth=2)
+        axes[1].set_title(f'{model_name} - Loss', fontsize=14, fontweight='bold')
+        axes[1].set_xlabel('Epoch')
+        axes[1].set_ylabel('Loss')
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        filename = f'{self.results_dir}/training_history_{model_name.lower()}.png'
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def compare_all_models(self):
+        """Compare all models."""
+        print("\n" + "="*80)
+        print("MODEL COMPARISON")
+        print("="*80)
+        
+        comparison = []
+        for model_name, results in self.results.items():
+            comparison.append({
+                'Model': model_name,
+                'Accuracy': results['accuracy'],
+                'Precision': results['precision'],
+                'Recall': results['recall'],
+                'F1-Score': results['f1_score']
+            })
+        
+        df = pd.DataFrame(comparison).sort_values('F1-Score', ascending=False)
+        print("\n" + df.to_string(index=False))
+        
+        df.to_csv(f'{self.results_dir}/model_comparison.csv', index=False)
+        
+        self.plot_comparison(df)
+        
+        return df
+    
+    def plot_comparison(self, df):
+        """Plot comparison chart."""
+        fig, ax = plt.subplots(figsize=(14, 7))
+        
+        x = np.arange(len(df))
+        width = 0.2
+        
+        ax.bar(x - 1.5*width, df['Accuracy'], width, label='Accuracy', alpha=0.8)
+        ax.bar(x - 0.5*width, df['Precision'], width, label='Precision', alpha=0.8)
+        ax.bar(x + 0.5*width, df['Recall'], width, label='Recall', alpha=0.8)
+        ax.bar(x + 1.5*width, df['F1-Score'], width, label='F1-Score', alpha=0.8)
+        
+        ax.set_xlabel('Models', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Score', fontsize=12, fontweight='bold')
+        ax.set_title('Model Performance Comparison', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(df['Model'], rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim([0, 1.05])
+        
+        plt.tight_layout()
+        plt.savefig(f'{self.results_dir}/model_comparison.png', dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    def generate_report(self):
+        """Generate final report."""
+        print("\n" + "="*80)
+        print("GENERATING REPORT")
+        print("="*80)
+        
+        report = []
+        report.append("="*80)
+        report.append("IDS MODEL TRAINING - FINAL REPORT")
+        report.append("="*80)
+        report.append("")
+        
+        report.append("DATASET")
+        report.append("-"*80)
+        report.append(f"Training: {len(self.X_train):,} samples")
+        report.append(f"Testing: {len(self.X_test):,} samples")
+        report.append(f"Features: {self.X_train.shape[1]}")
+        report.append(f"Classes: {self.num_classes}")
+        report.append("")
+        
+        report.append("RESULTS")
+        report.append("-"*80)
+        for name, res in sorted(self.results.items(), key=lambda x: x[1]['f1_score'], reverse=True):
+            report.append(f"\n{name.upper()}")
+            report.append(f"  Accuracy:  {res['accuracy']:.4f}")
+            report.append(f"  Precision: {res['precision']:.4f}")
+            report.append(f"  Recall:    {res['recall']:.4f}")
+            report.append(f"  F1-Score:  {res['f1_score']:.4f}")
+        
+        report_text = "\n".join(report)
+        print(report_text)
+        
+        with open(f'{self.results_dir}/final_report.txt', 'w') as f:
+            f.write(report_text)
+    
+    def train_all_models(self, train_ml=True, train_dl=True, 
+                        create_ensemble=True, train_hybrids=True):
+        """Train all models."""
+        print("\n" + "="*80)
+        print("TRAINING ALL MODELS")
+        print("="*80)
+        
+        if train_ml:
+            self.train_decision_tree()
+            self.train_random_forest()
+            self.train_xgboost()
+            self.train_lightgbm()
+            self.train_gradient_boosting()
+        
+        if train_dl:
+            self.train_cnn(epochs=20)
+            self.train_lstm(epochs=20)
+        
+        if create_ensemble and train_ml:
+            self.create_ml_ensemble()
+        
+        if train_hybrids:
+            self.create_hybrid_dl_xgboost()
+            self.create_hybrid_stacking()
+            self.create_hybrid_parallel()
+        
+        self.compare_all_models()
+        self.generate_report()
+        
+        print("\n" + "="*80)
+        print("✅ ALL MODELS TRAINED!")
+        print("="*80)
+
+
+if __name__ == "__main__":
+    DATA_DIR = r'location_of_preprocessed_file'
+    
+    trainer = IDSModelTrainer(data_dir=DATA_DIR)
+    
+    trainer.train_all_models(
+        train_ml=True,       # All original ML models
+        train_dl=True,       # CNN, LSTM (corrected)
+        create_ensemble=True,  # ML ensemble
+        train_hybrids=True   # 3 hybrid models
+    )
+    
+    print(f"\n✅ TRAINING COMPLETE!")
+    print(f"\nResults saved to: {trainer.results_dir}/")
+    print(f"\nModels trained:")
+    for model_name in trainer.models.keys():
+        print(f"  • {model_name}")

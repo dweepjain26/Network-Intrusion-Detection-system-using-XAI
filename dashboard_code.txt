@@ -1,0 +1,1497 @@
+Code for dashboard
+
+nids_dashboard.html
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroTrace - Network Intrusion Detection</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5568d3;
+            --primary-light: #818cf8;
+            --secondary: #764ba2;
+            --accent: #f093fb;
+            
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --surface: #1e293b;
+            
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-tertiary: #94a3b8;
+            
+            --border: #334155;
+            
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            
+            --radius: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body {
+            font-family: 'Poppins', -apple-system, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 24px;
+            line-height: 1.6;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(102, 126, 234, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(118, 75, 162, 0.3) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Animated Particles */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            animation: float 20s infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0) translateX(0); opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateY(-100vh) translateX(100px); opacity: 0; }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+/* Part 2: Header and Upload Section Styles - Add to <style> section */
+
+/* Header */
+.header {
+    background: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(51, 65, 85, 0.5);
+    padding: 32px 48px;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+}
+
+.header::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--primary), var(--accent), var(--secondary));
+}
+
+.header-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 24px;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+}
+
+.logo {
+    width: 72px;
+    height: 72px;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+    border-radius: var(--radius-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 36px;
+    box-shadow: 0 8px 32px rgba(102, 126, 234, 0.4);
+}
+
+.header-text h1 {
+    font-size: 36px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #fff 0%, var(--text-secondary) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+}
+
+.header-text p {
+    color: var(--text-secondary);
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.header-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+    border: 1px solid rgba(102, 126, 234, 0.3);
+    color: var(--text-primary);
+    padding: 12px 24px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 14px;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.2);
+}
+
+.badge-pulse {
+    width: 8px;
+    height: 8px;
+    background: var(--success);
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+}
+
+/* Alert */
+.alert {
+    padding: 18px 24px;
+    border-radius: var(--radius-lg);
+    margin-bottom: 24px;
+    display: none;
+    font-weight: 500;
+    font-size: 14px;
+    box-shadow: var(--shadow);
+    border: 1px solid;
+    backdrop-filter: blur(10px);
+}
+
+.alert.active {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideIn 0.3s ease-out;
+}
+
+.alert-icon {
+    font-size: 22px;
+    flex-shrink: 0;
+}
+
+.alert.error {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.alert.success {
+    background: rgba(16, 185, 129, 0.15);
+    color: #6ee7b7;
+    border-color: rgba(16, 185, 129, 0.3);
+}
+
+.alert.warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fcd34d;
+    border-color: rgba(245, 158, 11, 0.3);
+}
+
+/* Upload Section */
+.upload-section {
+    background: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    padding: 40px;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    margin-bottom: 32px;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 32px;
+}
+
+.section-icon {
+    width: 48px;
+    height: 48px;
+    background: linear-gradient(135deg, var(--primary-light) 0%, var(--primary) 100%);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+}
+
+.section-header h2 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.file-input-container {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius-lg);
+    padding: 60px;
+    text-align: center;
+    cursor: pointer;
+    transition: var(--transition);
+    background: rgba(51, 65, 85, 0.3);
+    position: relative;
+}
+
+.file-input-container:hover {
+    border-color: var(--primary);
+    background: rgba(51, 65, 85, 0.5);
+    box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+}
+
+.file-input-container.drag-over {
+    border-color: var(--success);
+    background: rgba(16, 185, 129, 0.1);
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1);
+}
+
+.upload-icon {
+    font-size: 56px;
+    margin-bottom: 20px;
+    opacity: 0.9;
+}
+
+.file-input {
+    display: none;
+}
+
+.file-input-container h3 {
+    color: var(--text-primary);
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.file-input-container p {
+    color: var(--text-secondary);
+    font-size: 15px;
+}
+
+.controls {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 16px;
+    margin-top: 32px;
+}
+
+.control-input {
+    padding: 16px 20px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    font-size: 15px;
+    font-weight: 500;
+    font-family: inherit;
+    transition: var(--transition);
+    background: rgba(51, 65, 85, 0.5);
+    color: var(--text-primary);
+}
+
+.control-input:hover {
+    border-color: var(--primary);
+    background: rgba(51, 65, 85, 0.7);
+}
+
+.control-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+}
+
+.control-input option {
+    background: var(--bg-secondary);
+}
+
+.analyze-btn {
+    padding: 16px 32px;
+    border-radius: var(--radius);
+    border: none;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: var(--transition);
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.analyze-btn:hover:not(:disabled) {
+    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.5);
+    transform: translateY(-2px);
+}
+
+.analyze-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+
+/* Part 3: Results Section and Card Styles - Add to <style> section */
+
+/* Loading */
+.loading {
+    display: none;
+    text-align: center;
+    padding: 60px;
+    background: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    margin-bottom: 32px;
+}
+
+.loading.active {
+    display: block;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.spinner-container {
+    position: relative;
+    width: 100px;
+    height: 100px;
+    margin: 0 auto 32px;
+}
+
+.spinner {
+    position: absolute;
+    inset: 0;
+    border: 4px solid rgba(102, 126, 234, 0.2);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.spinner-glow {
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(102, 126, 234, 0.4) 0%, transparent 70%);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.loading h3 {
+    color: var(--text-primary);
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 12px;
+}
+
+.loading p {
+    color: var(--text-secondary);
+    font-size: 15px;
+    margin: 8px 0;
+}
+
+.progress-text {
+    margin-top: 20px;
+    padding: 12px 24px;
+    background: rgba(102, 126, 234, 0.2);
+    border: 1px solid rgba(102, 126, 234, 0.3);
+    border-radius: var(--radius);
+    color: var(--primary-light);
+    font-weight: 600;
+    font-size: 14px;
+    display: inline-block;
+}
+
+/* Results */
+.results {
+    display: none;
+}
+
+.results.active {
+    display: block;
+    animation: fadeIn 0.5s ease-out;
+}
+
+.results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 24px;
+    margin-bottom: 32px;
+}
+
+.card {
+    background: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    padding: 32px;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+    transition: var(--transition);
+    position: relative;
+    overflow: hidden;
+}
+
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--primary), var(--accent));
+    opacity: 0;
+    transition: var(--transition);
+}
+
+.card:hover {
+    box-shadow: var(--shadow-xl);
+    transform: translateY(-4px);
+    border-color: var(--primary);
+}
+
+.card:hover::before {
+    opacity: 1;
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+.card-icon {
+    width: 44px;
+    height: 44px;
+    background: linear-gradient(135deg, var(--primary-light) 0%, var(--primary) 100%);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.card-header h3 {
+    color: var(--text-primary);
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 0;
+    transition: var(--transition);
+}
+
+.stat-row:not(:last-child) {
+    border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.stat-label {
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.stat-value {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 16px;
+}
+
+.benign {
+    color: var(--success) !important;
+}
+
+.malicious {
+    color: var(--danger) !important;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 10px;
+    background: rgba(51, 65, 85, 0.5);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 10px;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 0 10px currentColor;
+}
+
+/* Attack List */
+.attack-list {
+    max-height: 500px;
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+.attack-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.attack-list::-webkit-scrollbar-track {
+    background: rgba(51, 65, 85, 0.3);
+    border-radius: 999px;
+}
+
+.attack-list::-webkit-scrollbar-thumb {
+    background: var(--primary);
+    border-radius: 999px;
+}
+
+.attack-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    margin: 12px 0;
+    background: rgba(51, 65, 85, 0.4);
+    border-radius: var(--radius);
+    border-left: 4px solid var(--primary);
+    transition: var(--transition);
+}
+
+.attack-item:hover {
+    background: rgba(51, 65, 85, 0.6);
+    transform: translateX(6px);
+    box-shadow: var(--shadow);
+}
+
+.attack-item.benign {
+    border-left-color: var(--success);
+}
+
+.attack-item.malicious {
+    border-left-color: var(--danger);
+}
+
+.attack-content {
+    flex: 1;
+}
+
+.attack-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.attack-stats {
+    text-align: right;
+    min-width: 120px;
+}
+
+.attack-percentage {
+    font-weight: 700;
+    font-size: 24px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.attack-count {
+    color: var(--text-tertiary);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+
+/* Part 4: XAI Section Styles - Add to <style> section */
+
+/* XAI Section */
+.xai-section {
+    margin-top: 32px;
+}
+
+.info-box {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    padding: 28px;
+    border-radius: var(--radius-lg);
+    margin-bottom: 24px;
+    box-shadow: 0 8px 32px rgba(102, 126, 234, 0.4);
+    display: flex;
+    align-items: center;
+    gap: 24px;
+}
+
+.info-icon {
+    width: 56px;
+    height: 56px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    flex-shrink: 0;
+}
+
+.info-content h4 {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.info-content p {
+    font-size: 15px;
+    opacity: 0.95;
+    line-height: 1.6;
+}
+
+.xai-card {
+    background: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    padding: 40px;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 32px;
+    background: rgba(51, 65, 85, 0.4);
+    padding: 8px;
+    border-radius: var(--radius);
+}
+
+.tab {
+    flex: 1;
+    padding: 14px 24px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 15px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: var(--transition);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.tab:hover {
+    color: var(--text-primary);
+    background: rgba(102, 126, 234, 0.1);
+}
+
+.tab.active {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.tab-content-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.tab-content-header h3 {
+    color: var(--text-primary);
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.tab-content > p {
+    color: var(--text-secondary);
+    margin-bottom: 28px;
+    font-size: 15px;
+    line-height: 1.7;
+}
+
+/* LIME Explanations */
+.lime-explanation {
+    background: rgba(51, 65, 85, 0.4);
+    padding: 28px;
+    border-radius: var(--radius-lg);
+    margin-bottom: 24px;
+    border-left: 4px solid var(--primary);
+    transition: var(--transition);
+}
+
+.lime-explanation:hover {
+    background: rgba(51, 65, 85, 0.6);
+    box-shadow: var(--shadow);
+}
+
+.lime-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.lime-header h4 {
+    color: var(--text-primary);
+    font-size: 17px;
+    font-weight: 700;
+}
+
+.lime-confidence {
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+    font-size: 15px;
+}
+
+.confidence-badge {
+    display: inline-block;
+    padding: 6px 14px;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+    color: white;
+    border-radius: var(--radius);
+    font-weight: 700;
+    font-size: 14px;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.feature-importance-header {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 20px;
+    font-size: 15px;
+}
+
+.feature-bar {
+    display: flex;
+    align-items: center;
+    margin: 14px 0;
+    gap: 14px;
+}
+
+.feature-name {
+    width: 220px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.feature-value {
+    flex: 1;
+    height: 28px;
+    border-radius: var(--radius);
+    min-width: 6px;
+    box-shadow: 0 0 12px currentColor;
+    transition: var(--transition);
+}
+
+.feature-bar:hover .feature-value {
+    transform: scaleY(1.1);
+}
+
+.feature-score {
+    font-weight: 700;
+    color: var(--text-primary);
+    min-width: 80px;
+    text-align: right;
+    font-size: 14px;
+}
+
+.xai-viz {
+    width: 100%;
+    max-width: 100%;
+    border-radius: var(--radius-lg);
+    margin: 24px 0;
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    body {
+        padding: 16px;
+    }
+
+    .header {
+        padding: 24px 32px;
+    }
+
+    .header-content {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .header-text h1 {
+        font-size: 28px;
+    }
+
+    .controls {
+        grid-template-columns: 1fr;
+    }
+
+    .results-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .feature-name {
+        width: 140px;
+    }
+}
+
+    </style>
+</head>
+<body>
+    <!-- Animated Particles -->
+    <div class="particles" id="particles"></div>
+
+    <div class="container">
+<!-- Part 5: HTML Structure - Add inside <div class="container"> -->
+
+<!-- Header -->
+<div class="header">
+    <div class="header-content">
+        <div class="header-left">
+            <div class="logo">🛡️</div>
+            <div class="header-text">
+                <h1>NeuroTrace</h1>
+                <p>AI-Powered Network Intrusion Detection with Explainability</p>
+            </div>
+        </div>
+        <div class="header-badge">
+            <div class="badge-pulse"></div>
+            <span>LIME + SHAP Enabled</span>
+        </div>
+    </div>
+</div>
+
+<!-- Alert -->
+<div class="alert" id="alert">
+    <span class="alert-icon" id="alertIcon"></span>
+    <span id="alertMessage"></span>
+</div>
+
+<!-- Upload Section -->
+<div class="upload-section">
+    <div class="section-header">
+        <div class="section-icon">📁</div>
+        <h2>Upload Network Traffic Data</h2>
+    </div>
+    
+    <div class="file-input-container" id="dropZone">
+        <div class="upload-icon">📤</div>
+        <h3>Drop CSV file here or click to browse</h3>
+        <input type="file" class="file-input" id="fileInput" accept=".csv">
+    </div>
+
+    <div class="controls">
+        <select class="control-input" id="modelSelect">
+            <option value="">Loading models...</option>
+        </select>
+        <input type="number" class="control-input" id="explainSamples" 
+               value="5" min="1" max="10" placeholder="XAI samples">
+        <button class="analyze-btn" id="analyzeBtn" disabled>
+            <span>🔍</span>
+            <span>Analyze with XAI</span>
+        </button>
+    </div>
+</div>
+
+<!-- Loading -->
+<div class="loading" id="loading">
+    <div class="spinner-container">
+        <div class="spinner-glow"></div>
+        <div class="spinner"></div>
+    </div>
+    <h3>Analyzing with Explainable AI</h3>
+    <p>Generating LIME and SHAP explanations</p>
+    <div class="progress-text" id="loadingProgress">Initializing...</div>
+</div>
+
+<!-- Results -->
+<div class="results" id="results">
+    <!-- Summary Cards -->
+    <div class="results-grid">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon">📊</div>
+                <h3>Detection Summary</h3>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Total Samples</span>
+                <span class="stat-value" id="totalSamples">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Processing Time</span>
+                <span class="stat-value" id="processingTime">0s</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Speed</span>
+                <span class="stat-value" id="processingSpeed">0/sec</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Model Used</span>
+                <span class="stat-value" id="modelUsed">-</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon">🚦</div>
+                <h3>Traffic Classification</h3>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Benign Traffic</span>
+                <span class="stat-value benign" id="benignCount">0</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="benignProgress" style="background: linear-gradient(90deg, var(--success), #6ee7b7);"></div>
+            </div>
+            <div class="stat-row" style="margin-top: 16px;">
+                <span class="stat-label">Malicious Traffic</span>
+                <span class="stat-value malicious" id="maliciousCount">0</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="maliciousProgress" style="background: linear-gradient(90deg, var(--danger), #fca5a5);"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div class="card-icon">📈</div>
+                <h3>Prediction Confidence</h3>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Average Confidence</span>
+                <span class="stat-value" id="avgConfidence">-</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="confidenceProgress" style="background: linear-gradient(90deg, var(--primary), var(--accent));"></div>
+            </div>
+            <div class="stat-row" id="accuracyRow" style="margin-top: 16px; display: none;">
+                <span class="stat-label">Accuracy</span>
+                <span class="stat-value" id="accuracy">-</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Attack Types -->
+    <div class="card">
+        <div class="card-header">
+            <div class="card-icon">⚠️</div>
+            <h3>Detected Attack Types</h3>
+        </div>
+        <div class="attack-list" id="attackList"></div>
+    </div>
+
+    <!-- XAI Section -->
+    <div class="xai-section">
+        <div class="info-box">
+            <div class="info-icon">🔍</div>
+            <div class="info-content">
+                <h4>Explainable AI Insights</h4>
+                <p>Understanding model predictions through LIME (local explanations) and SHAP (global feature importance)</p>
+            </div>
+        </div>
+
+        <div class="xai-card">
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('lime', event)">
+                    <span>🎯</span>
+                    <span>LIME Explanations</span>
+                </button>
+                <button class="tab" onclick="switchTab('shap', event)">
+                    <span>📊</span>
+                    <span>SHAP Analysis</span>
+                </button>
+            </div>
+
+            <!-- LIME Tab -->
+            <div id="lime-tab" class="tab-content active">
+                <div class="tab-content-header">
+                    <span>🎯</span>
+                    <h3>LIME (Local Interpretable Model-agnostic Explanations)</h3>
+                </div>
+                <p>LIME explains individual predictions by identifying which features most influenced each decision.</p>
+                <div id="limeExplanations"></div>
+            </div>
+
+            <!-- SHAP Tab -->
+            <div id="shap-tab" class="tab-content">
+                <div class="tab-content-header">
+                    <span>📊</span>
+                    <h3>SHAP (SHapley Additive exPlanations)</h3>
+                </div>
+                <p>SHAP values provide global feature importance across all predictions.</p>
+                <div id="shapExplanation"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+    </div>
+    <script>
+/* Part 6: JavaScript - Main Functions - Add inside <script> tags */
+
+// Create floating particles
+function createParticles() {
+    const particlesContainer = document.getElementById('particles');
+    for (let i = 0; i < 50; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'particle';
+        particle.style.left = Math.random() * 100 + '%';
+        particle.style.animationDelay = Math.random() * 20 + 's';
+        particle.style.animationDuration = (15 + Math.random() * 10) + 's';
+        particlesContainer.appendChild(particle);
+    }
+}
+createParticles();
+
+let selectedFile = null;
+let analysisResults = null;
+let availableModels = [];
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const modelSelect = document.getElementById('modelSelect');
+const explainSamples = document.getElementById('explainSamples');
+const loading = document.getElementById('loading');
+const results = document.getElementById('results');
+const alert = document.getElementById('alert');
+
+// Initialize
+async function init() {
+    try {
+        const response = await fetch('http://localhost:5000/models');
+        const data = await response.json();
+        
+        availableModels = data.models;
+        populateModelSelect(data.models);
+        
+        showAlert(`System ready! ${data.models.length} models available.`, 'success', '✅');
+    } catch (error) {
+        showAlert('Warning: Could not load models. Using defaults.', 'warning', '⚠️');
+        populateModelSelect([
+            {key: 'xgboost', name: 'XGBoost', recommended: true},
+            {key: 'random_forest', name: 'Random Forest', recommended: false}
+        ]);
+    }
+}
+
+function populateModelSelect(models) {
+    modelSelect.innerHTML = '';
+    
+    models.forEach(model => {
+        const option = document.createElement('option');
+        option.value = model.key;
+        
+        let label = model.name || model.key;
+        if (model.recommended) {
+            label += ' ⭐';
+        }
+        
+        option.textContent = label;
+        option.title = model.description || '';
+        
+        modelSelect.appendChild(option);
+    });
+}
+
+// File upload handlers
+dropZone.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+        handleFileSelect(e.target.files[0]);
+    }
+});
+
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+});
+
+dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('drag-over');
+});
+
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length > 0) {
+        handleFileSelect(e.dataTransfer.files[0]);
+    }
+});
+
+function handleFileSelect(file) {
+    if (!file.name.endsWith('.csv')) {
+        showAlert('Please select a CSV file', 'error', '❌');
+        return;
+    }
+    selectedFile = file;
+    analyzeBtn.disabled = false;
+    showAlert(`File loaded: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`, 'success', '✅');
+}
+
+analyzeBtn.addEventListener('click', analyzeFile);
+
+async function analyzeFile() {
+    if (!selectedFile) return;
+
+    loading.classList.add('active');
+    results.classList.remove('active');
+    alert.classList.remove('active');
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('model', modelSelect.value);
+    formData.append('explain_samples', explainSamples.value);
+
+    try {
+        document.getElementById('loadingProgress').textContent = 'Uploading and preprocessing...';
+        
+        const response = await fetch('http://localhost:5000/analyze', {
+            method: 'POST',
+            body: formData
+        });
+
+        document.getElementById('loadingProgress').textContent = 'Processing results...';
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Analysis failed');
+        }
+
+        analysisResults = await response.json();
+        
+        if (analysisResults.error) {
+            throw new Error(analysisResults.error);
+        }
+
+        displayResults(analysisResults);
+    } catch (error) {
+        showAlert('Error: ' + error.message, 'error', '❌');
+        console.error('Analysis error:', error);
+    } finally {
+        loading.classList.remove('active');
+    }
+}
+
+function showAlert(message, type, icon) {
+    const alertEl = document.getElementById('alert');
+    const alertIcon = document.getElementById('alertIcon');
+    const alertMessage = document.getElementById('alertMessage');
+    
+    alertIcon.textContent = icon || '⚠️';
+    alertMessage.textContent = message;
+    alertEl.className = `alert ${type} active`;
+    
+    const duration = type === 'error' ? 10000 : 5000;
+    setTimeout(() => alertEl.classList.remove('active'), duration);
+}
+
+// Initialize on page load
+init();
+
+
+/* Part 7: JavaScript - Display Functions - Add to <script> section */
+
+function displayResults(data) {
+    results.classList.add('active');
+
+    // Basic stats
+    document.getElementById('totalSamples').textContent = data.total_samples.toLocaleString();
+    document.getElementById('processingTime').textContent = data.processing_time_seconds + 's';
+    document.getElementById('processingSpeed').textContent = Math.round(data.samples_per_second).toLocaleString() + '/sec';
+    document.getElementById('modelUsed').textContent = data.model_used.toUpperCase();
+
+    // Traffic distribution
+    document.getElementById('benignCount').textContent = 
+        `${data.benign_count.toLocaleString()} (${data.benign_percentage}%)`;
+    document.getElementById('maliciousCount').textContent = 
+        `${data.attack_count.toLocaleString()} (${data.attack_percentage}%)`;
+    
+    setTimeout(() => {
+        document.getElementById('benignProgress').style.width = data.benign_percentage + '%';
+        document.getElementById('maliciousProgress').style.width = data.attack_percentage + '%';
+    }, 100);
+
+    // Confidence
+    if (data.average_confidence) {
+        const confidencePct = (data.average_confidence * 100).toFixed(2);
+        document.getElementById('avgConfidence').textContent = confidencePct + '%';
+        setTimeout(() => {
+            document.getElementById('confidenceProgress').style.width = confidencePct + '%';
+        }, 100);
+    }
+
+    // Accuracy
+    if (data.validation && data.validation.accuracy) {
+        const accuracyRow = document.getElementById('accuracyRow');
+        accuracyRow.style.display = 'flex';
+        document.getElementById('accuracy').textContent = (data.validation.accuracy * 100).toFixed(2) + '%';
+    }
+
+    // Attack types
+    displayAttackTypes(data.detection_summary);
+
+    // XAI Explanations
+    if (data.explanations) {
+        displayLIMEExplanations(data.explanations.lime_explanations);
+        displaySHAPExplanation(data.explanations.shap_explanation);
+    }
+
+    showAlert('Analysis complete! 🎉', 'success', '✅');
+}
+
+function displayAttackTypes(summary) {
+    const attackList = document.getElementById('attackList');
+    attackList.innerHTML = '';
+
+    const sorted = Object.entries(summary).sort((a, b) => b[1].count - a[1].count);
+
+    sorted.forEach(([attackName, data]) => {
+        const isBenign = attackName.toUpperCase().includes('BENIGN') || 
+                        attackName.toUpperCase().includes('NORMAL');
+        
+        const item = document.createElement('div');
+        item.className = `attack-item ${isBenign ? 'benign' : 'malicious'}`;
+        
+        item.innerHTML = `
+            <div class="attack-content">
+                <div class="attack-name">
+                    <span>${isBenign ? '✅' : '⚠️'}</span>
+                    <span>${attackName}</span>
+                </div>
+                <div class="progress-bar" style="max-width: 400px;">
+                    <div class="progress-fill" style="width: ${data.percentage}%; background: ${isBenign ? 'linear-gradient(90deg, var(--success), #6ee7b7)' : 'linear-gradient(90deg, var(--danger), #fca5a5)'};"></div>
+                </div>
+            </div>
+            <div class="attack-stats">
+                <div class="attack-percentage">${data.percentage}%</div>
+                <div class="attack-count">${data.count.toLocaleString()} samples</div>
+            </div>
+        `;
+        
+        attackList.appendChild(item);
+    });
+}
+
+function displayLIMEExplanations(explanations) {
+    const container = document.getElementById('limeExplanations');
+    container.innerHTML = '';
+
+    if (!explanations || explanations.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-tertiary);">No LIME explanations available.</p>';
+        return;
+    }
+
+    explanations.forEach((exp) => {
+        const div = document.createElement('div');
+        div.className = 'lime-explanation';
+        
+        let topFeaturesHtml = '';
+        let features = [];
+        
+        if (exp.top_features && typeof exp.top_features === 'object') {
+            if (Array.isArray(exp.top_features)) {
+                features = exp.top_features;
+            } else {
+                const classNames = Object.keys(exp.top_features);
+                if (classNames.length > 0) {
+                    features = exp.top_features[classNames[0]];
+                }
+            }
+        }
+        
+        if (!Array.isArray(features)) {
+            features = [];
+        }
+        
+        if (features.length === 0) {
+            topFeaturesHtml = '<p style="color: var(--text-tertiary);">No feature importance data available</p>';
+        } else {
+            const maxImp = Math.max(...features.map(f => Math.abs(f.contribution || f.importance || 0)));
+            
+            features.slice(0, 8).forEach(f => {
+                const contrib = f.contribution || f.importance || 0;
+                const absImp = Math.abs(contrib);
+                const width = maxImp > 0 ? (absImp / maxImp * 100).toFixed(1) : 0;
+                const gradient = contrib > 0 
+                    ? 'linear-gradient(90deg, var(--success), #6ee7b7)' 
+                    : 'linear-gradient(90deg, var(--danger), #fca5a5)';
+                const featureName = f.feature || f.name || 'Unknown';
+                
+                topFeaturesHtml += `
+                    <div class="feature-bar">
+                        <span class="feature-name" title="${featureName}">${featureName}</span>
+                        <div class="feature-value" style="width: ${width}%; background: ${gradient};"></div>
+                        <span class="feature-score">${contrib.toFixed(4)}</span>
+                    </div>
+                `;
+            });
+        }
+
+        div.innerHTML = `
+            <div class="lime-header">
+                <span>📌</span>
+                <h4>Sample #${exp.instance_index} - ${exp.predicted_class || exp.predicted_label || 'Unknown'}</h4>
+            </div>
+            <p class="lime-confidence">
+                Confidence: <span class="confidence-badge">${exp.confidence ? (exp.confidence * 100).toFixed(2) : 'N/A'}%</span>
+            </p>
+            <div>
+                <div class="feature-importance-header">Top Contributing Features</div>
+                ${topFeaturesHtml}
+            </div>
+            ${exp.visualization ? `<img src="data:image/png;base64,${exp.visualization}" class="xai-viz" alt="LIME visualization" />` : ''}
+        `;
+        
+        container.appendChild(div);
+    });
+}
+
+function displaySHAPExplanation(explanation) {
+    const container = document.getElementById('shapExplanation');
+    container.innerHTML = '';
+
+    if (!explanation) {
+        container.innerHTML = '<p style="color: var(--text-tertiary);">No SHAP explanation available.</p>';
+        return;
+    }
+
+    let featuresHtml = '';
+    const features = Object.entries(explanation.top_features);
+    const maxImp = Math.max(...features.map(([_, imp]) => imp));
+    
+    features.forEach(([feature, importance]) => {
+        const width = (importance / maxImp * 100).toFixed(1);
+        featuresHtml += `
+            <div class="feature-bar">
+                <span class="feature-name" title="${feature}">${feature}</span>
+                <div class="feature-value" style="width: ${width}%; background: linear-gradient(90deg, var(--primary), var(--primary-light));"></div>
+                <span class="feature-score">${importance.toFixed(4)}</span>
+            </div>
+        `;
+    });
+
+    container.innerHTML = `
+        <div style="margin-bottom: 24px;">
+            <div class="feature-importance-header">Global Feature Importance (Top 10 Features)</div>
+            <p style="color: var(--text-secondary); margin: 10px 0; font-size: 13px;">
+                Based on ${explanation.num_samples_explained} samples analyzed
+            </p>
+            <div style="margin-top: 16px;">
+                ${featuresHtml}
+            </div>
+        </div>
+        ${explanation.visualization ? `<img src="data:image/png;base64,${explanation.visualization}" class="xai-viz" alt="SHAP visualization" />` : ''}
+    `;
+}
+
+function switchTab(tab, event) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    
+    event.currentTarget.classList.add('active');
+    document.getElementById(tab + '-tab').classList.add('active');
+}
+
+    </script>
+</body>
+</html>

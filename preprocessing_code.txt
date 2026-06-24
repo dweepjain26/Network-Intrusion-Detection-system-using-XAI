@@ -1,0 +1,513 @@
+Code of preprocessing file
+to run this file first go into that folder where saved by using command cd <folder_name>
+then run this command python preprocessing_last.py
+
+
+preprocessing_last.py 
+
+
+import pandas as pd
+import numpy as np
+import os
+import gc
+from glob import glob
+from sklearn.preprocessing import RobustScaler, LabelEncoder
+from sklearn.feature_selection import VarianceThreshold, SelectKBest, f_classif
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
+import joblib
+import json
+from datetime import datetime
+from collections import Counter
+import warnings
+warnings.filterwarnings('ignore')
+
+class MemoryEfficientIDSPreprocessor:
+    """Memory-efficient IDS preprocessing without SMOTE."""
+    
+    def __init__(self, data_dir, output_dir='processed_cicids_final', 
+                 max_samples_per_class=50000, min_samples_per_class=1000,
+                 test_size=0.2):
+        self.data_dir = data_dir
+        self.output_dir = output_dir
+        self.max_samples_per_class = max_samples_per_class
+        self.min_samples_per_class = min_samples_per_class
+        self.test_size = test_size
+        self.scaler = None
+        self.label_encoder = None
+        self.var_selector = None
+        self.kbest_selector = None
+        self.feature_names = None
+        self.selected_feature_names = None
+        self.class_weights = None
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        self.csv_files = sorted(glob(os.path.join(data_dir, '*.csv')))
+        print(f"\n{'='*80}")
+        print("MEMORY-EFFICIENT IDS PREPROCESSING (NO SMOTE)")
+        print(f"{'='*80}")
+        print(f"Found {len(self.csv_files)} CSV files")
+        print(f"Max samples per class: {max_samples_per_class:,}")
+        print(f"Min samples per class: {min_samples_per_class:,}")
+        print(f"Test size: {test_size*100}%")
+        print(f"\n💡 APPROACH:")
+        print(f"  • Stratified sampling (balanced collection)")
+        print(f"  • Class weights for imbalanced learning")
+        print(f"  • No SMOTE (memory efficient)")
+        print(f"  • Split BEFORE preprocessing (no leakage)")
+        print(f"{'='*80}\n")
+    
+    def analyze_dataset(self):
+        """Quick scan to understand class distribution."""
+        print(f"\n{'='*80}")
+        print("STEP 1: ANALYZING DATASET")
+        print(f"{'='*80}")
+        
+        all_labels = []
+        total_rows = 0
+        
+        for i, filepath in enumerate(self.csv_files, 1):
+            filename = os.path.basename(filepath)
+            print(f"\n[{i}/{len(self.csv_files)}] Scanning: {filename}")
+            
+            try:
+                for chunk in pd.read_csv(filepath, usecols=lambda x: 'label' in x.lower(), 
+                                        chunksize=100000, low_memory=False):
+                    chunk.columns = chunk.columns.str.strip()
+                    label_col = [col for col in chunk.columns if col.lower() == 'label'][0]
+                    all_labels.extend(chunk[label_col].tolist())
+                    total_rows += len(chunk)
+                    del chunk
+                    gc.collect()
+                
+            except Exception as e:
+                print(f"  ❌ Error: {e}")
+        
+        label_dist = Counter(all_labels)
+        
+        print(f"\n{'='*80}")
+        print("DATASET DISTRIBUTION")
+        print(f"{'='*80}")
+        print(f"\nTotal rows: {total_rows:,}")
+        print(f"Unique classes: {len(label_dist)}")
+        print(f"\nClass distribution:")
+        print("-"*80)
+        
+        for label, count in sorted(label_dist.items(), key=lambda x: x[1], reverse=True):
+            pct = (count / total_rows) * 100
+            print(f"  {label:35s} {count:>10,} ({pct:>6.2f}%)")
+        
+        return label_dist
+    
+    def collect_stratified_samples(self, label_dist):
+        """Collect stratified samples from all files."""
+        print(f"\n{'='*80}")
+        print("STEP 2: COLLECTING STRATIFIED SAMPLES")
+        print(f"{'='*80}")
+        
+        sampling_plan = {}
+        for label, count in label_dist.items():
+            if count > self.max_samples_per_class:
+                sampling_plan[label] = self.max_samples_per_class
+                print(f"  {label:35s} {count:>10,} → {self.max_samples_per_class:>10,} (capped)")
+            elif count < self.min_samples_per_class:
+                sampling_plan[label] = count
+                print(f"  {label:35s} {count:>10,} → {count:>10,} (keep all)")
+            else:
+                sampling_plan[label] = min(count, self.min_samples_per_class)
+                print(f"  {label:35s} {count:>10,} → {sampling_plan[label]:>10,}")
+        
+        print(f"\n📊 Collecting samples...")
+        
+        collected_data = {label: [] for label in sampling_plan.keys()}
+        collected_counts = {label: 0 for label in sampling_plan.keys()}
+        
+        for i, filepath in enumerate(self.csv_files, 1):
+            filename = os.path.basename(filepath)
+            print(f"\n[{i}/{len(self.csv_files)}] Processing: {filename}")
+            
+            try:
+                for chunk in pd.read_csv(filepath, chunksize=50000, low_memory=False):
+                    chunk.columns = chunk.columns.str.strip()
+                    chunk = self.clean_data(chunk)
+                    
+                    label_col = [col for col in chunk.columns if col.lower() == 'label'][0]
+                    
+                    for label in sampling_plan.keys():
+                        if collected_counts[label] < sampling_plan[label]:
+                            class_data = chunk[chunk[label_col] == label]
+                            
+                            if len(class_data) > 0:
+                                needed = sampling_plan[label] - collected_counts[label]
+                                if len(class_data) > needed:
+                                    class_data = class_data.sample(n=needed, random_state=42)
+                                
+                                collected_data[label].append(class_data)
+                                collected_counts[label] += len(class_data)
+                    
+                    del chunk
+                    gc.collect()
+                    
+                    if all(collected_counts[label] >= sampling_plan[label] for label in sampling_plan.keys()):
+                        break
+                
+            except Exception as e:
+                print(f"  ❌ Error: {e}")
+        
+        print(f"\n{'='*80}")
+        print("COMBINING COLLECTED SAMPLES")
+        print(f"{'='*80}")
+        
+        all_dfs = []
+        for label, dfs in collected_data.items():
+            if dfs:
+                combined = pd.concat(dfs, ignore_index=True)
+                all_dfs.append(combined)
+                print(f"  {label:35s} {len(combined):>10,} samples")
+        
+        final_df = pd.concat(all_dfs, ignore_index=True)
+        
+        # CRITICAL FIX: Store feature names BEFORE any transformations
+        label_col = [col for col in final_df.columns if col.lower() == 'label'][0]
+        self.feature_names = [col for col in final_df.columns if col != label_col]
+        print(f"\n✓ Saved {len(self.feature_names)} original feature names")
+        
+        del collected_data, all_dfs
+        gc.collect()
+        
+        print(f"\n✅ Total collected: {len(final_df):,} samples")
+        
+        return final_df
+    
+    def clean_data(self, df):
+        """Basic data cleaning."""
+        drop_cols = ['Flow ID', 'Source IP', 'Destination IP', 
+                    'Src IP', 'Dst IP', 'Timestamp', 'Flow Byts/s', 'Flow Pkts/s']
+        
+        cols_to_drop = [col for col in drop_cols if col in df.columns]
+        if cols_to_drop:
+            df.drop(columns=cols_to_drop, inplace=True)
+        
+        df.drop_duplicates(inplace=True)
+        
+        for col in df.columns:
+            if df[col].dtype in ['float64', 'int64', 'float32', 'int32']:
+                df[col].replace([np.inf, -np.inf], np.nan, inplace=True)
+                df[col].fillna(0, inplace=True)
+        
+        return df
+    
+    def split_data_first(self, df):
+        """Split data BEFORE preprocessing to prevent leakage."""
+        print(f"\n{'='*80}")
+        print("STEP 3: TRAIN/TEST SPLIT (BEFORE PREPROCESSING)")
+        print(f"{'='*80}")
+        print("\n⚠️  This prevents data leakage!")
+        
+        label_col = [col for col in df.columns if col.lower() == 'label'][0]
+        
+        X = df.drop(label_col, axis=1)
+        y = df[label_col]
+        
+        print(f"\n🔧 Converting features to numeric...")
+        for col in X.columns:
+            if X[col].dtype == 'object':
+                X[col] = pd.to_numeric(X[col], errors='coerce')
+        X.fillna(0, inplace=True)
+        
+        print(f"🔧 Encoding labels...")
+        self.label_encoder = LabelEncoder()
+        y_encoded = self.label_encoder.fit_transform(y)
+        
+        print(f"🔧 Performing stratified split...")
+        X_train, X_test, y_train, y_test = train_test_split(
+            X.values, y_encoded,
+            test_size=self.test_size,
+            random_state=42,
+            stratify=y_encoded
+        )
+        
+        print(f"\n✅ Split complete:")
+        print(f"  Training: {X_train.shape[0]:,} samples, {X_train.shape[1]} features")
+        print(f"  Testing:  {X_test.shape[0]:,} samples, {X_test.shape[1]} features")
+        
+        print(f"\n📊 Training Set Distribution:")
+        unique, counts = np.unique(y_train, return_counts=True)
+        for label_idx, count in zip(unique, counts):
+            label_name = self.label_encoder.inverse_transform([label_idx])[0]
+            pct = (count / len(y_train)) * 100
+            print(f"  {label_name:35s} {count:>8,} ({pct:>5.2f}%)")
+        
+        del X, y, df
+        gc.collect()
+        
+        return X_train, X_test, y_train, y_test
+    
+    def compute_class_weights(self, y_train):
+        """Compute class weights for imbalanced learning."""
+        print(f"\n{'='*80}")
+        print("STEP 4: COMPUTING CLASS WEIGHTS")
+        print(f"{'='*80}")
+        
+        classes = np.unique(y_train)
+        class_weights_array = compute_class_weight(
+            class_weight='balanced',
+            classes=classes,
+            y=y_train
+        )
+        
+        self.class_weights = dict(zip(classes, class_weights_array))
+        
+        print(f"\n📊 Class Weights:")
+        for label_idx, weight in self.class_weights.items():
+            label_name = self.label_encoder.inverse_transform([label_idx])[0]
+            print(f"  {label_name:35s} weight: {weight:>8.4f}")
+        
+        return self.class_weights
+    
+    def fit_preprocessing_on_training(self, X_train):
+        """Fit scaler ONLY on training data."""
+        print(f"\n{'='*80}")
+        print("STEP 5: FIT PREPROCESSING ON TRAINING DATA")
+        print(f"{'='*80}")
+        
+        print(f"\n🔧 Fitting scaler on training data...")
+        self.scaler = RobustScaler()
+        X_scaled = self.scaler.fit_transform(X_train)
+        print(f"  ✓ Scaler fitted: {X_scaled.shape}")
+        
+        return X_scaled
+    
+    def apply_feature_selection_on_training(self, X_train, y_train, k_features=50):
+        """Fit feature selectors ONLY on training data - CORRECTED INDENTATION."""
+        print(f"\n{'='*80}")
+        print("STEP 6: FEATURE SELECTION ON TRAINING DATA")
+        print(f"{'='*80}")
+        
+        print(f"\nStarting features: {X_train.shape[1]}")
+        
+        # Variance threshold
+        print(f"\n🔧 Fitting variance selector...")
+        self.var_selector = VarianceThreshold(threshold=0.01)
+        X_var = self.var_selector.fit_transform(X_train)
+        print(f"  ✓ After variance threshold: {X_var.shape[1]} features")
+        
+        # SelectKBest
+        if X_var.shape[1] > k_features:
+            print(f"\n🔧 Fitting SelectKBest (k={k_features})...")
+            self.kbest_selector = SelectKBest(f_classif, k=k_features)
+            X_selected = self.kbest_selector.fit_transform(X_var, y_train)
+            print(f"  ✓ After SelectKBest: {X_selected.shape[1]} features")
+        else:
+            X_selected = X_var
+            self.kbest_selector = None
+            print(f"  ℹ️  Keeping all {X_var.shape[1]} features (less than k={k_features})")
+        
+        del X_var
+        gc.collect()
+        
+        # CRITICAL FIX: Proper feature name tracking
+        if self.feature_names is not None:
+            # After variance threshold
+            var_mask = self.var_selector.get_support()
+            features_after_var = [self.feature_names[i] for i in range(len(self.feature_names)) if var_mask[i]]
+            
+            # After SelectKBest (if applied)
+            if self.kbest_selector is not None:
+                kbest_mask = self.kbest_selector.get_support()
+                self.selected_feature_names = [features_after_var[i] for i in range(len(features_after_var)) if kbest_mask[i]]
+            else:
+                self.selected_feature_names = features_after_var
+            
+            print(f"\n✓ Selected features: {len(self.selected_feature_names)}")
+            print(f"  First 10: {self.selected_feature_names[:10]}")
+        
+        return X_selected
+    
+    def transform_test_data(self, X_test):
+        """Apply fitted transformations to test data."""
+        print(f"\n{'='*80}")
+        print("STEP 7: TRANSFORM TEST DATA")
+        print(f"{'='*80}")
+        
+        print(f"\n🔧 Scaling test data...")
+        X_scaled = self.scaler.transform(X_test)
+        
+        print(f"🔧 Applying variance threshold...")
+        X_var = self.var_selector.transform(X_scaled)
+        
+        if self.kbest_selector:
+            print(f"🔧 Applying SelectKBest...")
+            X_selected = self.kbest_selector.transform(X_var)
+        else:
+            X_selected = X_var
+        
+        print(f"  ✓ Test data transformed: {X_selected.shape}")
+        
+        del X_scaled, X_var
+        gc.collect()
+        
+        return X_selected
+    
+    def save_all_artifacts(self, X_train, X_test, y_train, y_test):
+        """Save all preprocessing artifacts."""
+        print(f"\n{'='*80}")
+        print("STEP 8: SAVING ARTIFACTS")
+        print(f"{'='*80}")
+        
+        # Save arrays
+        np.save(os.path.join(self.output_dir, 'X_train.npy'), X_train)
+        np.save(os.path.join(self.output_dir, 'X_test.npy'), X_test)
+        np.save(os.path.join(self.output_dir, 'y_train.npy'), y_train)
+        np.save(os.path.join(self.output_dir, 'y_test.npy'), y_test)
+        print("  ✓ Train/test arrays saved")
+        
+        # Save preprocessing objects
+        joblib.dump(self.scaler, os.path.join(self.output_dir, 'scaler.pkl'))
+        joblib.dump(self.label_encoder, os.path.join(self.output_dir, 'label_encoder.pkl'))
+        joblib.dump(self.var_selector, os.path.join(self.output_dir, 'variance_selector.pkl'))
+        if self.kbest_selector:
+            joblib.dump(self.kbest_selector, os.path.join(self.output_dir, 'kbest_selector.pkl'))
+        
+        # Save feature names
+        if self.feature_names:
+            joblib.dump(self.feature_names, os.path.join(self.output_dir, 'feature_names.pkl'))
+        if self.selected_feature_names:
+            joblib.dump(self.selected_feature_names, os.path.join(self.output_dir, 'selected_feature_names.pkl'))
+            
+            with open(os.path.join(self.output_dir, 'selected_features.json'), 'w') as f:
+                json.dump({
+                    'num_features': len(self.selected_feature_names),
+                    'feature_names': self.selected_feature_names
+                }, f, indent=2)
+            
+            print("  ✓ Feature names saved (PKL and JSON)")
+        
+        # Save class weights
+        joblib.dump(self.class_weights, os.path.join(self.output_dir, 'class_weights.pkl'))
+        print("  ✓ Preprocessing objects saved")
+        
+        # Save metadata
+        metadata = {
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'preprocessing_type': 'memory_efficient_no_smote',
+            'approach': 'stratified_sampling_with_class_weights',
+            'max_samples_per_class': self.max_samples_per_class,
+            'min_samples_per_class': self.min_samples_per_class,
+            'test_size': self.test_size,
+            'num_original_features': len(self.feature_names) if self.feature_names else None,
+            'num_selected_features': len(self.selected_feature_names) if self.selected_feature_names else None,
+            'feature_selection_applied': self.kbest_selector is not None,
+            'train_samples': int(len(X_train)),
+            'test_samples': int(len(X_test)),
+            'num_features': int(X_train.shape[1]),
+            'num_classes': int(len(self.label_encoder.classes_)),
+            'class_names': self.label_encoder.classes_.tolist(),
+            'class_weights': {
+                self.label_encoder.inverse_transform([int(cls)])[0]: float(weight)
+                for cls, weight in self.class_weights.items()
+            },
+            'train_distribution': {
+                self.label_encoder.inverse_transform([int(cls)])[0]: int(count)
+                for cls, count in zip(*np.unique(y_train, return_counts=True))
+            },
+            'test_distribution': {
+                self.label_encoder.inverse_transform([int(cls)])[0]: int(count)
+                for cls, count in zip(*np.unique(y_test, return_counts=True))
+            },
+            'no_leakage_guarantees': {
+                'split_before_preprocessing': True,
+                'no_smote': True,
+                'scaler_fitted_on_training_only': True,
+                'feature_selection_on_training_only': True,
+                'uses_class_weights': True
+            }
+        }
+        
+        with open(os.path.join(self.output_dir, 'metadata.json'), 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print("  ✓ Metadata saved")
+        
+        # Save class weights as JSON
+        class_weights_dict = {
+            self.label_encoder.inverse_transform([int(cls)])[0]: float(weight)
+            for cls, weight in self.class_weights.items()
+        }
+        with open(os.path.join(self.output_dir, 'class_weights.json'), 'w') as f:
+            json.dump(class_weights_dict, f, indent=2)
+        print("  ✓ Class weights JSON saved")
+        
+        print(f"\n✅ All artifacts saved to: {self.output_dir}/")
+    
+    def process_complete_pipeline(self, k_features=50):
+        """Execute the complete preprocessing pipeline."""
+        print(f"\n{'='*80}")
+        print("STARTING MEMORY-EFFICIENT PREPROCESSING")
+        print(f"{'='*80}")
+        
+        start_time = datetime.now()
+        
+        label_dist = self.analyze_dataset()
+        df = self.collect_stratified_samples(label_dist)
+        del label_dist
+        gc.collect()
+        
+        X_train, X_test, y_train, y_test = self.split_data_first(df)
+        del df
+        gc.collect()
+        
+        self.compute_class_weights(y_train)
+        
+        X_train_scaled = self.fit_preprocessing_on_training(X_train)
+        del X_train
+        gc.collect()
+        
+        X_train_selected = self.apply_feature_selection_on_training(X_train_scaled, y_train, k_features)
+        del X_train_scaled
+        gc.collect()
+        
+        X_test_transformed = self.transform_test_data(X_test)
+        del X_test
+        gc.collect()
+        
+        self.save_all_artifacts(X_train_selected, X_test_transformed, y_train, y_test)
+        
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        
+        print(f"\n{'='*80}")
+        print("✅ PREPROCESSING COMPLETE!")
+        print(f"{'='*80}")
+        print(f"\nProcessing time: {duration:.2f} seconds ({duration/60:.2f} minutes)")
+        print(f"\n🎯 Summary:")
+        print(f"  • Training samples: {len(X_train_selected):,}")
+        print(f"  • Testing samples: {len(X_test_transformed):,}")
+        print(f"  • Features: {X_train_selected.shape[1]}")
+        print(f"  • Attack types: {len(self.label_encoder.classes_)}")
+        print(f"{'='*80}")
+        
+        return {
+            'X_train': X_train_selected,
+            'X_test': X_test_transformed,
+            'y_train': y_train,
+            'y_test': y_test,
+            'class_weights': self.class_weights
+        }
+
+
+if __name__ == "__main__":
+    DATA_DIR = r'folder_location_where_dataset_is_there'
+    OUTPUT_DIR = r'file_location_where_new_folder_processed_cicids_final_folder_has to be made'
+    
+    preprocessor = MemoryEfficientIDSPreprocessor(
+        data_dir=DATA_DIR,
+        output_dir=OUTPUT_DIR,
+        max_samples_per_class=50000,
+        min_samples_per_class=1000,
+        test_size=0.2
+    )
+    
+    data = preprocessor.process_complete_pipeline(k_features=50)
+    
+    print("\n✅ SUCCESS!")
